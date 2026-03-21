@@ -41,13 +41,20 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
           cache: maven
+          server-id: github-investment
+          server-username: GITHUB_ACTOR
+          server-password: GITHUB_TOKEN
           
       - name: Build Java Package
         if: ${{ inputs.language == 'java' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: mvn clean package -DskipTests
 
       - name: Run Java Tests
         if: ${{ inputs.language == 'java' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: mvn test || echo "Test step failed or skipped"
 
       # ===============================
@@ -88,11 +95,11 @@ jobs:
         if: ${{ inputs.image_name != '' }}
         run: |
           cd $GITHUB_WORKSPACE
-          if [ "${{ inputs.language }}" == "python" ] && [ -f "Dockerfile.base-python" ]; then
+          if [ "${{ inputs.language }}" = "python" ] && [ -f "Dockerfile.base-python" ]; then
             docker build -t am-python-base:latest -f Dockerfile.base-python .
-          elif [ "${{ inputs.language }}" == "java" ] && [ -f "Dockerfile.base-java-maven" ]; then
+          elif [ "${{ inputs.language }}" = "java" ] && [ -f "Dockerfile.base-java-maven" ]; then
             docker build -t am-java-maven-base:latest -f Dockerfile.base-java-maven .
-          elif [ "${{ inputs.language }}" == "flutter" ] && [ -f "Dockerfile.base-flutter" ]; then
+          elif [ "${{ inputs.language }}" = "flutter" ] && [ -f "Dockerfile.base-flutter" ]; then
             docker build -t am-flutter-base:latest -f Dockerfile.base-flutter .
           fi
           

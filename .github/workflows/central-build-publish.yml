@@ -84,6 +84,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
           
+      - name: Pre-build Local Base Image
+        if: ${{ inputs.image_name != '' }}
+        run: |
+          cd $GITHUB_WORKSPACE
+          if [ "${{ inputs.language }}" == "python" ] && [ -f "Dockerfile.base-python" ]; then
+            docker build -t am-python-base:latest -f Dockerfile.base-python .
+          elif [ "${{ inputs.language }}" == "java" ] && [ -f "Dockerfile.base-java-maven" ]; then
+            docker build -t am-java-maven-base:latest -f Dockerfile.base-java-maven .
+          elif [ "${{ inputs.language }}" == "flutter" ] && [ -f "Dockerfile.base-flutter" ]; then
+            docker build -t am-flutter-base:latest -f Dockerfile.base-flutter .
+          fi
+          
       - name: Build and Push Docker Container
         if: ${{ inputs.image_name != '' }}
         run: |
@@ -101,8 +113,8 @@ jobs:
       - name: Checkout Universal Helm Chart
         uses: actions/checkout@v4
         with:
-          repository: AM-Portfolio/am-cicd
-          path: am-cicd-repo
+          repository: AM-Portfolio/am-pipelines
+          path: am-pipelines-repo
           
       - name: Deploy via Universal Helm Chart
         run: |
@@ -111,7 +123,7 @@ jobs:
             CHART_DIR=$(ls -d helm/* | head -n 1)
             echo "Deploying using Universal Chart with values from $CHART_DIR/values.yaml..."
             # For this example, we mock the helm upgrade command
-            echo helm upgrade --install ${{ inputs.image_name }} ./am-cicd-repo/helm/universal-chart -f $CHART_DIR/values.yaml
+            echo helm upgrade --install ${{ inputs.image_name }} ./am-pipelines-repo/helm/universal-chart -f $CHART_DIR/values.yaml
           else
             echo "No helm/ directory found. Skipping deployment."
           fi

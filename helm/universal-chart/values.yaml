@@ -1,0 +1,21 @@
+global:
+  image:
+    registry: ghcr.io/am-portfolio
+    tag: latest
+    pullPolicy: IfNotPresent
+  vault:
+    enabled: false
+    role: default-role
+    authPath: auth/kubernetes
+    secrets: {}
+
+environment: default
+replicaCount: 1
+
+image:
+  repository: ""
+
+port: 8080
+
+resources: {}
+env: {}

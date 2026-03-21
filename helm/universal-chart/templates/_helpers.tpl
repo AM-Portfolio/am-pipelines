@@ -1,0 +1,34 @@
+{{/* Expand the name of the chart. */}}
+{{- define "universal-chart.name" -}}
+{{- default .Values.image.repository | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/* Create a default fully qualified app name. */}}
+{{- define "universal-chart.fullname" -}}
+{{- if .Values.fullnameOverride }}
+{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- default .Values.image.repository | trunc 63 | trimSuffix "-" }}
+{{- end }}
+{{- end }}
+
+{{/* Common labels */}}
+{{- define "universal-chart.labels" -}}
+helm.sh/chart: {{ include "universal-chart.chart" . }}
+{{ include "universal-chart.selectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{/* Selector labels */}}
+{{- define "universal-chart.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "universal-chart.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{/* Chart name and version */}}
+{{- define "universal-chart.chart" -}}
+{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
+{{- end }}

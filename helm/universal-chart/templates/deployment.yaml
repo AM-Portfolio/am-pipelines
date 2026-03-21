@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "universal-chart.fullname" . }}
+  labels:
+    {{- include "universal-chart.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "universal-chart.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "universal-chart.selectorLabels" . | nindent 8 }}
+      annotations:
+        {{- if .Values.global.vault.enabled }}
+        # Vault Agent Sidecar Injector
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: {{ .Values.global.vault.role | quote }}
+        vault.hashicorp.com/auth-path: {{ .Values.global.vault.authPath | quote }}
+        vault.hashicorp.com/agent-pre-populate-only: "false"
+        {{- range $k, $v := .Values.global.vault.secrets }}
+        vault.hashicorp.com/agent-inject-secret-{{ $k }}: {{ if kindIs "string" $v }}{{ $v | quote }}{{ else }}{{ $v.path | quote }}{{ end }}
+        vault.hashicorp.com/agent-inject-template-{{ $k }}: |
+          {{`{{`}}- with secret {{ if kindIs "string" $v }}{{ $v | quote }}{{ else }}{{ $v.path | quote }}{{ end }} {{`}}`}}
+          {{- if and (not (kindIs "string" $v)) $v.keys }}
+          {{- range $varName := $v.keys }}
+          export {{ $varName }}="{{`{{`}} index .Data.data {{ $varName | quote }} {{`}}`}}"
+          {{- end }}
+          {{- else }}
+          {{`{{`}}- range $sk, $sv := .Data.data {{`}}`}}
+          export {{`{{`}} $sk {{`}}`}}="{{`{{`}} $sv {{`}}`}}"
+          {{`{{`}} end {{`}}`}}
+          {{- end }}
+          {{`{{`}} end {{`}}`}}
+        {{- end }}
+        {{- end }}
+    spec:
+      {{- if .Values.global.vault.enabled }}
+      serviceAccountName: {{ include "universal-chart.fullname" . }}-vault-sa
+      {{- end }}
+      containers:
+        - name: {{ include "universal-chart.fullname" . }}
+          image: "{{ .Values.global.image.registry }}/{{ .Values.image.repository }}:{{ .Values.global.image.tag }}"
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.port }}
+          {{- if .Values.global.vault.enabled }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              {{- range $k, $v := .Values.global.vault.secrets }}
+              . /vault/secrets/{{ $k }} 2>/dev/null || true
+              {{- end }}
+              exec uvicorn main:app --host 0.0.0.0 --port {{ .Values.port }}
+          {{- end }}
+          env:
+            - name: ENVIRONMENT
+              value: {{ .Values.environment | quote }}
+            {{- if .Values.env }}
+            {{- range $k, $v := .Values.env }}
+            - name: {{ $k | quote }}
+              value: {{ $v | quote }}
+            {{- end }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.port }}
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3

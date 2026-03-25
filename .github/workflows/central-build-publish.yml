@@ -98,8 +98,11 @@ jobs:
           # Docker names must be lowercase
           IMAGE_ID=$(echo $IMAGE_ID | tr '[A-Z]' '[a-z]')
           
+          BASE_REG="ghcr.io/${{ github.repository_owner }}/"
+          BASE_REG=$(echo $BASE_REG | tr '[A-Z]' '[a-z]')
+          
           echo "Building container for $IMAGE_ID..."
-          docker build -t $IMAGE_ID:${{ github.run_number }} -t $IMAGE_ID:latest .
+          docker build --build-arg BASE_REGISTRY=$BASE_REG -t $IMAGE_ID:${{ github.run_number }} -t $IMAGE_ID:latest .
           
           echo "Pushing container to $IMAGE_ID..."
           docker push $IMAGE_ID:${{ github.run_number }}

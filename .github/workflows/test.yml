@@ -1,0 +1,8 @@
+name: Test Reusable Workflow
+on:
+  workflow_call:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Success! Cross-repo workflow resolution is working."

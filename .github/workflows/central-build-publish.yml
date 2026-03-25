@@ -107,7 +107,7 @@ jobs:
           BASE_REG=$(echo $BASE_REG | tr '[A-Z]' '[a-z]')
           
           echo "Building container for $IMAGE_ID..."
-          docker build --build-arg BASE_REGISTRY=$BASE_REG -t $IMAGE_ID:${{ github.run_number }} -t $IMAGE_ID:latest ${{ inputs.build_context }}
+          docker build -f Dockerfile --build-arg BASE_REGISTRY=$BASE_REG -t $IMAGE_ID:${{ github.run_number }} -t $IMAGE_ID:latest ${{ inputs.build_context }}
           
           echo "Pushing container to $IMAGE_ID..."
           docker push $IMAGE_ID:${{ github.run_number }}

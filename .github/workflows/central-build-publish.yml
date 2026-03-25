@@ -91,41 +91,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
           
-      - name: Debug Workspace structure
-        run: |
-          echo "Current working directory: $(pwd)"
-          echo "GITHUB_WORKSPACE: ${{ github.workspace }}"
-          ls -F
-          ls -F ${{ github.workspace }}
-
-      - name: Pre-build Local Base Image
-        if: ${{ inputs.image_name != '' }}
-        run: |
-          # Search for the base Dockerfile in the current directory, workspace root, or parent of current directory
-          # This handles both standalone repos and monorepo folders
-          FIND_FILE="Dockerfile.base-${{ inputs.language }}"
-          BASE_DOCKERFILE=""
-          
-          if [ -f "$FIND_FILE" ]; then
-            BASE_DOCKERFILE="$FIND_FILE"
-          elif [ -f "${{ github.workspace }}/$FIND_FILE" ]; then
-            BASE_DOCKERFILE="${{ github.workspace }}/$FIND_FILE"
-          elif [ -f "../$FIND_FILE" ]; then
-            BASE_DOCKERFILE="../$FIND_FILE"
-          fi
-          
-          if [ -n "$BASE_DOCKERFILE" ]; then
-            echo "Found base image definition at $BASE_DOCKERFILE. Building..."
-            CONTEXT=$(dirname "$BASE_DOCKERFILE")
-            TAG="am-${{ inputs.language }}-base:latest"
-            # Special case for java maven base name mismatch
-            if [ "${{ inputs.language }}" = "java" ]; then TAG="am-java-maven-base:latest"; fi
-            
-            docker build -t "$TAG" -f "$BASE_DOCKERFILE" "$CONTEXT"
-          else
-            echo "No base image definition ($FIND_FILE) found in root, current, or parent directory. Skipping pre-build."
-          fi
-          
       - name: Build and Push Docker Container
         if: ${{ inputs.image_name != '' }}
         run: |

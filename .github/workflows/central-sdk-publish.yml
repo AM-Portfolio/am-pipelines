@@ -35,13 +35,12 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          server-id: github # Must match the id in distributionManagement and settings.xml
-          settings-path: ${{ github.workspace }}/${{ inputs.working_directory }}/settings.xml
 
       - name: Create Temporary Maven Settings
         if: ${{ inputs.language == 'java' }}
         working-directory: ${{ inputs.working_directory }}
         run: |
+          rm -rf settings.xml
           cat <<EOF > settings.xml
           <settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
                     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"

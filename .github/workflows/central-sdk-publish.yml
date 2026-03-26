@@ -1,0 +1,106 @@
+name: Central SDK Publish
+
+on:
+  workflow_call:
+    inputs:
+      language:
+        description: 'Programming language of the SDK'
+        required: true
+        type: string
+      working_directory:
+        description: 'Directory containing the project files'
+        required: true
+        type: string
+      package_name:
+        description: 'Output package name'
+        required: false
+        type: string
+    secrets:
+      GITHUB_TOKEN:
+        required: true
+
+jobs:
+  publish:
+    name: Build and Publish Library
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # --- Java (Maven) Section ---
+      - name: Set up JDK 17
+        if: ${{ inputs.language == 'java' }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          server-id: github # Must match the id in distributionManagement and settings.xml
+          settings-path: ${{ github.workspace }}/${{ inputs.working_directory }}/settings.xml
+
+      - name: Create Temporary Maven Settings
+        if: ${{ inputs.language == 'java' }}
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          cat <<EOF > settings.xml
+          <settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                    xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0
+                                http://maven.apache.org/xsd/settings-1.0.0.xsd">
+              <servers>
+                  <server>
+                      <id>github</id>
+                      <username>\${env.GITHUB_ACTOR}</username>
+                      <password>\${env.GITHUB_TOKEN}</password>
+                  </server>
+                  <server>
+                      <id>github-investment</id>
+                      <username>\${env.GITHUB_ACTOR}</username>
+                      <password>\${env.GITHUB_TOKEN}</password>
+                  </server>
+              </servers>
+          </settings>
+          EOF
+
+      - name: Publish Java SDK
+        if: ${{ inputs.language == 'java' }}
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          mvn clean deploy -DskipTests --settings settings.xml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # --- Flutter (Dart) Section ---
+      - name: Set up Flutter
+        if: ${{ inputs.language == 'flutter' }}
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - name: Verify Flutter SDK
+        if: ${{ inputs.language == 'flutter' }}
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test
+          # Note: Verification step for library integrity.
+          # Publishing to private pub servers would involve 'dart pub publish --hosted ...'
+
+      # --- Python Section ---
+      - name: Set up Python
+        if: ${{ inputs.language == 'python' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Build Python SDK
+        if: ${{ inputs.language == 'python' }}
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+          # Verification only for now

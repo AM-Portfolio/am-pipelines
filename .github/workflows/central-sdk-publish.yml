@@ -82,7 +82,11 @@ jobs:
         run: |
           flutter pub get
           flutter analyze
-          flutter test
+          if [ -d "test" ]; then
+            flutter test
+          else
+            echo "No 'test' directory found, skipping 'flutter test'."
+          fi
           # Note: Verification step for library integrity.
           # Publishing to private pub servers would involve 'dart pub publish --hosted ...'
 

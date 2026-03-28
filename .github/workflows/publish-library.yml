@@ -1,0 +1,243 @@
+name: Publish Library
+# ─────────────────────────────────────────────────────────────────────────────
+# REUSABLE WORKFLOW — called by any repository's workflow.
+#
+# Supports:
+#   language: python  → Builds .whl/.tar.gz, publishes to GitHub Release
+#   language: java    → Runs mvn deploy to GitHub Packages Maven registry
+#   language: flutter → Analyzes, tests, zips source, publishes to GitHub Release
+#
+# Each repo customises via `with:` inputs. Common logic lives here.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_call:
+    inputs:
+      language:
+        description: 'SDK language: python | java | flutter'
+        required: true
+        type: string
+      working_directory:
+        description: 'Path to the SDK directory (relative to repo root)'
+        required: true
+        type: string
+      sdk_name:
+        description: 'Canonical SDK name used for the release tag (e.g. flutter-market-sdk)'
+        required: false
+        type: string
+        default: ''
+      maven_repo_id:
+        description: 'Maven server id in pom.xml distributionManagement (java only)'
+        required: false
+        type: string
+        default: 'github'
+      maven_repo_url:
+        description: 'GitHub Packages Maven URL (java only)'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  publish:
+    name: Build & Publish — ${{ inputs.sdk_name || inputs.working_directory }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create GitHub Releases, push tags
+      packages: write   # push to GitHub Packages Maven registry
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Resolve SDK name ──────────────────────────────────────────────────
+      - name: Resolve SDK name
+        id: meta
+        run: |
+          SDK_NAME="${{ inputs.sdk_name }}"
+          if [ -z "$SDK_NAME" ]; then
+            SDK_NAME=$(basename "${{ inputs.working_directory }}")
+          fi
+          echo "sdk_name=$SDK_NAME" >> $GITHUB_OUTPUT
+
+      # ═══════════════════════════════════════════════════════════════════════
+      # PYTHON → GitHub Release (.whl + .tar.gz)
+      # GitHub Packages does NOT support a pip registry.
+      # Install: pip install <release-download-url>/<package>.whl
+      # ═══════════════════════════════════════════════════════════════════════
+      - name: Set up Python
+        if: inputs.language == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Build Python wheel and sdist
+        if: inputs.language == 'python'
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          python -m pip install --upgrade build
+          python -m build
+
+      - name: Read Python version from pyproject.toml
+        if: inputs.language == 'python'
+        id: py_version
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          VERSION=$(python -c "
+          import tomllib, pathlib
+          data = tomllib.loads(pathlib.Path('pyproject.toml').read_text())
+          print(data['project']['version'])
+          ")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Detected version: $VERSION"
+
+      - name: Publish Python SDK to GitHub Release
+        if: inputs.language == 'python'
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          SDK="${{ steps.meta.outputs.sdk_name }}"
+          VER="${{ steps.py_version.outputs.version }}"
+          TAG="${SDK}-v${VER}"
+          WHL=$(ls dist/*.whl | xargs basename)
+
+          cat <<EOF > /tmp/release-notes.md
+          ## ${SDK} v${VER}
+
+          ### Install
+          \`\`\`bash
+          pip install https://github.com/${{ github.repository }}/releases/download/${TAG}/${WHL}
+          \`\`\`
+
+          ### Install from git
+          \`\`\`bash
+          pip install "git+https://github.com/${{ github.repository }}.git@${{ github.sha }}#subdirectory=${{ inputs.working_directory }}"
+          \`\`\`
+          EOF
+
+          gh release create "$TAG" dist/* \
+            --title "${SDK} v${VER}" \
+            --notes-file /tmp/release-notes.md \
+            --repo "${{ github.repository }}" \
+            2>/dev/null || \
+          gh release upload "$TAG" dist/* --clobber \
+            --repo "${{ github.repository }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ═══════════════════════════════════════════════════════════════════════
+      # JAVA → GitHub Packages Maven Registry
+      # ═══════════════════════════════════════════════════════════════════════
+      - name: Set up JDK 17
+        if: inputs.language == 'java'
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Create Maven settings.xml
+        if: inputs.language == 'java'
+        run: |
+          mkdir -p ~/.m2
+          cat <<EOF > ~/.m2/settings.xml
+          <settings>
+            <servers>
+              <server>
+                <id>github</id>
+                <username>\${env.GITHUB_ACTOR}</username>
+                <password>\${env.GITHUB_TOKEN}</password>
+              </server>
+              <server>
+                <id>github-investment</id>
+                <username>\${env.GITHUB_ACTOR}</username>
+                <password>\${env.GITHUB_TOKEN}</password>
+              </server>
+            </servers>
+          </settings>
+          EOF
+
+      - name: Build and Deploy Java SDK to GitHub Packages
+        if: inputs.language == 'java'
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          mvn -B clean deploy -DskipTests
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+
+      # ═══════════════════════════════════════════════════════════════════════
+      # FLUTTER → GitHub Release (.zip of source)
+      # Pub.dev publishing is not supported for private packages.
+      # Teams install via: flutter pub add <package-name> --git-url=...
+      # ═══════════════════════════════════════════════════════════════════════
+      - name: Set up Flutter
+        if: inputs.language == 'flutter'
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - name: Verify Flutter SDK (analyze + test)
+        if: inputs.language == 'flutter'
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          flutter pub get
+          flutter analyze
+          if [ -d "test" ]; then
+            flutter test
+          else
+            echo "No test/ directory found — skipping flutter test."
+          fi
+
+      - name: Read Flutter version from pubspec.yaml
+        if: inputs.language == 'flutter'
+        id: flutter_version
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          # Strip surrounding quotes and build-number suffix
+          VERSION=$(grep '^version:' pubspec.yaml | sed "s/version://;s/[\"' ]//g;s/+.*//" | xargs)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Detected version: $VERSION"
+
+      - name: Zip Flutter SDK source
+        if: inputs.language == 'flutter'
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          SDK="${{ steps.meta.outputs.sdk_name }}"
+          VER="${{ steps.flutter_version.outputs.version }}"
+          mkdir -p dist
+          zip -r "dist/${SDK}-${VER}.zip" . \
+            --exclude "dist/*" ".git/*" ".dart_tool/*" "build/*"
+
+      - name: Publish Flutter SDK to GitHub Release
+        if: inputs.language == 'flutter'
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          SDK="${{ steps.meta.outputs.sdk_name }}"
+          VER="${{ steps.flutter_version.outputs.version }}"
+          TAG="${SDK}-v${VER}"
+
+          cat <<EOF > /tmp/release-notes.md
+          ## ${SDK} v${VER}
+
+          ### Add to pubspec.yaml
+          \`\`\`yaml
+          dependencies:
+            ${SDK}:
+              git:
+                url: https://github.com/${{ github.repository }}.git
+                path: ${{ inputs.working_directory }}
+                ref: ${TAG}
+          \`\`\`
+
+          ### Or install the zip directly
+          Download \`${SDK}-${VER}.zip\` from the assets below.
+          EOF
+
+          gh release create "$TAG" dist/*.zip \
+            --title "${SDK} v${VER}" \
+            --notes-file /tmp/release-notes.md \
+            --repo "${{ github.repository }}" \
+            2>/dev/null || \
+          gh release upload "$TAG" dist/*.zip --clobber \
+            --repo "${{ github.repository }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

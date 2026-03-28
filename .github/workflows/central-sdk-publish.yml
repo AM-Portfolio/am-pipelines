@@ -97,10 +97,13 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Build Python SDK
+      - name: Build and Publish Python SDK
         if: ${{ inputs.language == 'python' }}
         working-directory: ${{ inputs.working_directory }}
         run: |
           python -m pip install --upgrade build twine
           python -m build
-          # Verification only for now
+          python -m twine upload --repository-url https://pypi.pkg.github.com/AM-Portfolio/am-market dist/*
+        env:
+          TWINE_USERNAME: ${{ github.actor }}
+          TWINE_PASSWORD: ${{ secrets.GITHUB_TOKEN }}

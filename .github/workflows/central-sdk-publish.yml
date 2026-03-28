@@ -108,11 +108,7 @@ jobs:
         run: |
           python -m pip install --upgrade build twine
           python -m build
-          REPO="${{ inputs.github_repository }}"
-          if [ -z "$REPO" ]; then
-            REPO="${{ github.repository }}"
-          fi
-          REGISTRY_URL="https://pypi.pkg.github.com/${REPO}/"
+          REGISTRY_URL="https://api.github.com/orgs/${{ github.repository_owner }}/packages/pypi/upload"
           echo "Publishing to: $REGISTRY_URL"
           python -m twine upload --verbose --repository-url "$REGISTRY_URL" dist/*
         env:

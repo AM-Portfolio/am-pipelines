@@ -15,6 +15,11 @@ on:
         description: 'Output package name'
         required: false
         type: string
+      github_repository:
+        description: 'GitHub repository in owner/repo format (used for GitHub Packages URL)'
+        required: false
+        type: string
+        default: ''
 
 jobs:
   publish:
@@ -103,7 +108,13 @@ jobs:
         run: |
           python -m pip install --upgrade build twine
           python -m build
-          python -m twine upload --verbose --repository-url https://pypi.pkg.github.com/${{ github.repository_owner }}/ dist/*
+          REPO="${{ inputs.github_repository }}"
+          if [ -z "$REPO" ]; then
+            REPO="${{ github.repository }}"
+          fi
+          REGISTRY_URL="https://pypi.pkg.github.com/${REPO}/"
+          echo "Publishing to: $REGISTRY_URL"
+          python -m twine upload --verbose --repository-url "$REGISTRY_URL" dist/*
         env:
           TWINE_USERNAME: ${{ github.actor }}
           TWINE_PASSWORD: ${{ secrets.GITHUB_TOKEN }}

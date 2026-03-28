@@ -82,11 +82,8 @@ jobs:
         id: py_version
         working-directory: ${{ inputs.working_directory }}
         run: |
-          VERSION=$(python -c "
-          import tomllib, pathlib
-          data = tomllib.loads(pathlib.Path('pyproject.toml').read_text())
-          print(data['project']['version'])
-          ")
+          # Use grep+sed — works on any Python version, no imports needed
+          VERSION=$(grep '^version' pyproject.toml | head -1 | sed 's/.*=\s*["\x27]\(.*\)["\x27].*/\1/' | xargs)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Detected version: $VERSION"
 

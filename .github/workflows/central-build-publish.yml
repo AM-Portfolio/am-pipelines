@@ -143,7 +143,14 @@ jobs:
     needs: build
     runs-on: self-hosted
     if: ${{ inputs.image_name != '' }}
-    environment: ${{ inputs.environment }}   # ← Pauses here for approval if env has required reviewers
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      packages: write
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+           # ← Pauses here for approval if env has required reviewers
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

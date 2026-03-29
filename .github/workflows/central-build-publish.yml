@@ -25,28 +25,29 @@ on:
         type: string
         default: "."
         description: "Docker build context relative to working_directory"
-      target_env:
-        required: false
-        type: string
-        default: "local"
-        description: "The target environment to deploy to (e.g., local, aks)"
-      environment:
-        required: false
-        type: string
-        default: "preprod"
-        description: "GitHub Environment name (must match the environment configured with approval rules in GitHub Settings)"
-      namespace:
+      preprod_namespace:
         required: false
         type: string
         default: "am-apps-preprod"
-        description: "Kubernetes namespace to deploy into"
+        description: "Kubernetes namespace for preprod"
+      prod_namespace:
+        required: false
+        type: string
+        default: "am-apps-prod"
+        description: "Kubernetes namespace for prod"
+      deploy_prod:
+        required: false
+        type: boolean
+        default: false
+        description: "Set to true to enable the prod deployment stage after preprod"
 
 jobs:
-  # ===============================
-  # BUILD JOB — GitHub-hosted runner
-  # Builds and pushes Docker image to GHCR
-  # ===============================
+  # ============================================================
+  # BUILD — GitHub-hosted runner
+  # Compiles, tests, builds and pushes Docker image to GHCR
+  # ============================================================
   build:
+    name: Build & Push
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -58,9 +59,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ===============================
-      # Java Setup & Build
-      # ===============================
+      # ── Java ──────────────────────────────────────────────
       - name: Set up JDK
         if: ${{ inputs.language == 'java' }}
         uses: actions/setup-java@v4
@@ -71,7 +70,7 @@ jobs:
           server-id: github-investment
           server-username: GITHUB_ACTOR
           server-password: GITHUB_TOKEN
-          
+
       - name: Build Java Package
         if: ${{ inputs.language == 'java' }}
         env:
@@ -84,22 +83,20 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: mvn test || echo "Test step failed or skipped"
 
-      # ===============================
-      # Python Setup & Build
-      # ===============================
+      # ── Python ────────────────────────────────────────────
       - name: Set up Python
         if: ${{ inputs.language == 'python' }}
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: 'pip'
-          
+
       - name: Install Python Dependencies
         if: ${{ inputs.language == 'python' }}
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          
+
       - name: Run Python Tests
         if: ${{ inputs.language == 'python' }}
         run: |
@@ -107,9 +104,7 @@ jobs:
           flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
           pytest || echo "Tests failed or not found - marking as skipped for now"
 
-      # ===============================
-      # Container Build & Push to GHCR
-      # ===============================
+      # ── Docker ────────────────────────────────────────────
       - name: Log in to GitHub Container Registry
         if: ${{ inputs.image_name != '' }}
         uses: docker/login-action@v3
@@ -117,50 +112,44 @@ jobs:
           registry: ${{ inputs.registry }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-          
-      - name: Build and Push Docker Container
+
+      - name: Build and Push Docker Image
         if: ${{ inputs.image_name != '' }}
         run: |
           IMAGE_ID=${{ inputs.registry }}/${{ github.repository_owner }}/${{ inputs.image_name }}
-          # Docker names must be lowercase
           IMAGE_ID=$(echo $IMAGE_ID | tr '[A-Z]' '[a-z]')
-          
           BASE_REG="ghcr.io/${{ github.repository_owner }}/"
           BASE_REG=$(echo $BASE_REG | tr '[A-Z]' '[a-z]')
-          
-          echo "Building container for $IMAGE_ID..."
-          docker build -f Dockerfile --build-arg BASE_REGISTRY=$BASE_REG -t $IMAGE_ID:${{ github.run_number }} -t $IMAGE_ID:latest ${{ inputs.build_context }}
-          
-          echo "Pushing container to $IMAGE_ID..."
+
+          echo "Building $IMAGE_ID ..."
+          docker build -f Dockerfile \
+            --build-arg BASE_REGISTRY=$BASE_REG \
+            -t $IMAGE_ID:${{ github.run_number }} \
+            -t $IMAGE_ID:latest \
+            ${{ inputs.build_context }}
+
+          echo "Pushing $IMAGE_ID ..."
           docker push $IMAGE_ID:${{ github.run_number }}
           docker push $IMAGE_ID:latest
 
-  # ===============================
-  # DEPLOY JOB — Self-hosted runner (Windows + kubectl + helm)
-  # Runs Helm upgrade against AKS and verifies rollout
-  # ===============================
-  deploy:
+  # ============================================================
+  # DEPLOY — PREPROD
+  # Self-hosted runner | environment: preprod (requires approval)
+  # Helm upgrade → kubectl rollout verify
+  # ============================================================
+  deploy-preprod:
+    name: Deploy → Preprod
     needs: build
     runs-on: self-hosted
     if: ${{ inputs.image_name != '' }}
-    environment: ${{ inputs.environment }}
+    environment: preprod                    # ⏸ Pauses for preprod approval
     permissions:
       contents: read
       packages: write
-    defaults:
-      run:
-        working-directory: ${{ inputs.working_directory }}
-           # ← Pauses here for approval if env has required reviewers
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Set short SHA
-        id: vars
-        shell: powershell
-        run: |
-          $sha = $env:GITHUB_SHA.Substring(0,7)
-          echo "sha_short=$sha" >> $env:GITHUB_OUTPUT
 
       - name: Checkout Universal Helm Chart
         uses: actions/checkout@v4
@@ -168,57 +157,113 @@ jobs:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
 
-      - name: Deploy via Helm to AKS
+      - name: Deploy to Preprod via Helm
         shell: powershell
         run: |
-          $chartDir = ""
-          if (Test-Path "${{ inputs.working_directory }}/helm") {
-            $chartDir = (Get-ChildItem "${{ inputs.working_directory }}/helm" -Directory | Select-Object -First 1).FullName
+          # Pick values.preprod.yaml if it exists, fall back to values.yaml
+          $valuesFile = "${{ inputs.working_directory }}/helm/values.preprod.yaml"
+          if (-not (Test-Path $valuesFile)) {
+            $valuesFile = "${{ inputs.working_directory }}/helm/values.yaml"
           }
+          $valuesArg = if (Test-Path $valuesFile) { "-f `"$valuesFile`"" } else { "" }
 
-          $valuesArg = ""
-          if ($chartDir -and (Test-Path "$chartDir/values.yaml")) {
-            $valuesArg = "-f `"$chartDir/values.yaml`""
-          }
-
-          Write-Host "🚀 Deploying ${{ inputs.image_name }} to namespace ${{ inputs.namespace }}..."
+          Write-Host "🚀 [PREPROD] Deploying ${{ inputs.image_name }} → ${{ inputs.preprod_namespace }}"
           $cmd = "helm upgrade --install ${{ inputs.image_name }} ./am-pipelines-repo/helm/universal-chart " +
-            "--namespace ${{ inputs.namespace }} " +
+            "--namespace ${{ inputs.preprod_namespace }} " +
+            "--create-namespace " +
             "--set global.image.registry=`"${{ inputs.registry }}/${{ github.repository_owner }}`" " +
             "--set global.image.tag=`"${{ github.run_number }}`" " +
             "--set global.image.pullPolicy=`"Always`" " +
             $valuesArg
           Invoke-Expression $cmd
 
-      - name: Verify Rollout
+      - name: Verify Preprod Rollout
         shell: powershell
         run: |
-          $ns = "${{ inputs.namespace }}"
+          $ns  = "${{ inputs.preprod_namespace }}"
           $dep = "${{ inputs.image_name }}"
-          $timeout = "10m"
-
-          Write-Host "⏳ Waiting for rollout: $dep in namespace $ns ..."
-          kubectl rollout status deployment/$dep -n $ns --timeout=$timeout
-
+          Write-Host "⏳ Waiting for rollout: $dep in $ns ..."
+          kubectl rollout status deployment/$dep -n $ns --timeout=10m
           if ($LASTEXITCODE -ne 0) {
             Write-Host "❌ Rollout FAILED for $dep"
-            Write-Host ""
-            Write-Host "=== Pod Status ==="
             kubectl get pods -n $ns
-            Write-Host ""
-            Write-Host "=== Recent Events ==="
             kubectl get events -n $ns --sort-by='.lastTimestamp' | Select-Object -Last 20
             exit 1
-          } else {
-            Write-Host "✅ $dep is healthy"
           }
+          Write-Host "✅ $dep is healthy in preprod"
 
-      - name: Rollout Summary (on failure)
+      - name: Diagnostics on Failure
         if: failure()
         shell: powershell
         run: |
-          Write-Host "🔍 Deployment failed. Full pod diagnostics:"
-          kubectl get pods -n ${{ inputs.namespace }} -o wide
-          Write-Host ""
-          Write-Host "--- Describe: ${{ inputs.image_name }} ---"
-          kubectl describe deployment/${{ inputs.image_name }} -n ${{ inputs.namespace }} 2>&1 | Select-Object -Last 30
+          Write-Host "🔍 Preprod deployment failed. Diagnostics:"
+          kubectl get pods -n ${{ inputs.preprod_namespace }} -o wide
+          kubectl describe deployment/${{ inputs.image_name }} -n ${{ inputs.preprod_namespace }} 2>&1 | Select-Object -Last 30
+
+  # ============================================================
+  # DEPLOY — PROD
+  # Self-hosted runner | environment: prod (requires approval)
+  # Only runs after preprod succeeds AND deploy_prod == true
+  # ============================================================
+  deploy-prod:
+    name: Deploy → Prod
+    needs: deploy-preprod
+    runs-on: self-hosted
+    if: ${{ inputs.image_name != '' && inputs.deploy_prod == true }}
+    environment: prod                       # ⏸ Pauses for prod approval
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Checkout Universal Helm Chart
+        uses: actions/checkout@v4
+        with:
+          repository: AM-Portfolio/am-pipelines
+          path: am-pipelines-repo
+
+      - name: Deploy to Prod via Helm
+        shell: powershell
+        run: |
+          # Pick values.prod.yaml if it exists, fall back to values.yaml
+          $valuesFile = "${{ inputs.working_directory }}/helm/values.prod.yaml"
+          if (-not (Test-Path $valuesFile)) {
+            $valuesFile = "${{ inputs.working_directory }}/helm/values.yaml"
+          }
+          $valuesArg = if (Test-Path $valuesFile) { "-f `"$valuesFile`"" } else { "" }
+
+          Write-Host "🚀 [PROD] Deploying ${{ inputs.image_name }} → ${{ inputs.prod_namespace }}"
+          $cmd = "helm upgrade --install ${{ inputs.image_name }} ./am-pipelines-repo/helm/universal-chart " +
+            "--namespace ${{ inputs.prod_namespace }} " +
+            "--create-namespace " +
+            "--set global.image.registry=`"${{ inputs.registry }}/${{ github.repository_owner }}`" " +
+            "--set global.image.tag=`"${{ github.run_number }}`" " +
+            "--set global.image.pullPolicy=`"Always`" " +
+            $valuesArg
+          Invoke-Expression $cmd
+
+      - name: Verify Prod Rollout
+        shell: powershell
+        run: |
+          $ns  = "${{ inputs.prod_namespace }}"
+          $dep = "${{ inputs.image_name }}"
+          Write-Host "⏳ Waiting for rollout: $dep in $ns ..."
+          kubectl rollout status deployment/$dep -n $ns --timeout=10m
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "❌ Rollout FAILED for $dep in prod"
+            kubectl get pods -n $ns
+            kubectl get events -n $ns --sort-by='.lastTimestamp' | Select-Object -Last 20
+            exit 1
+          }
+          Write-Host "✅ $dep is healthy in prod"
+
+      - name: Diagnostics on Failure
+        if: failure()
+        shell: powershell
+        run: |
+          Write-Host "🔍 Prod deployment failed. Diagnostics:"
+          kubectl get pods -n ${{ inputs.prod_namespace }} -o wide
+          kubectl describe deployment/${{ inputs.image_name }} -n ${{ inputs.prod_namespace }} 2>&1 | Select-Object -Last 30

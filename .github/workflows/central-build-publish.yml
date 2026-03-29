@@ -25,8 +25,27 @@ on:
         type: string
         default: "."
         description: "Docker build context relative to working_directory"
+      target_env:
+        required: false
+        type: string
+        default: "local"
+        description: "The target environment to deploy to (e.g., local, aks)"
+      environment:
+        required: false
+        type: string
+        default: "preprod"
+        description: "GitHub Environment name (must match the environment configured with approval rules in GitHub Settings)"
+      namespace:
+        required: false
+        type: string
+        default: "am-apps-preprod"
+        description: "Kubernetes namespace to deploy into"
 
 jobs:
+  # ===============================
+  # BUILD JOB — GitHub-hosted runner
+  # Builds and pushes Docker image to GHCR
+  # ===============================
   build:
     runs-on: ubuntu-latest
     permissions:
@@ -89,7 +108,7 @@ jobs:
           pytest || echo "Tests failed or not found - marking as skipped for now"
 
       # ===============================
-      # Container & Deployment (Publish to GHCR)
+      # Container Build & Push to GHCR
       # ===============================
       - name: Log in to GitHub Container Registry
         if: ${{ inputs.image_name != '' }}
@@ -115,21 +134,84 @@ jobs:
           echo "Pushing container to $IMAGE_ID..."
           docker push $IMAGE_ID:${{ github.run_number }}
           docker push $IMAGE_ID:latest
-          
+
+  # ===============================
+  # DEPLOY JOB — Self-hosted runner (Windows + kubectl + helm)
+  # Runs Helm upgrade against AKS and verifies rollout
+  # ===============================
+  deploy:
+    needs: build
+    runs-on: self-hosted
+    if: ${{ inputs.image_name != '' }}
+    environment: ${{ inputs.environment }}   # ← Pauses here for approval if env has required reviewers
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set short SHA
+        id: vars
+        shell: powershell
+        run: |
+          $sha = $env:GITHUB_SHA.Substring(0,7)
+          echo "sha_short=$sha" >> $env:GITHUB_OUTPUT
+
       - name: Checkout Universal Helm Chart
         uses: actions/checkout@v4
         with:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
-          
-      - name: Deploy via Universal Helm Chart
+
+      - name: Deploy via Helm to AKS
+        shell: powershell
         run: |
-          if [ -d "helm/" ]; then
-            # We assume the helm folder contains a single subfolder containing the values (e.g. helm/am-parser/values.yaml)
-            CHART_DIR=$(ls -d helm/* | head -n 1)
-            echo "Deploying using Universal Chart with values from $CHART_DIR/values.yaml..."
-            # For this example, we mock the helm upgrade command
-            echo helm upgrade --install ${{ inputs.image_name }} ./am-pipelines-repo/helm/universal-chart -f $CHART_DIR/values.yaml
-          else
-            echo "No helm/ directory found. Skipping deployment."
-          fi
+          $chartDir = ""
+          if (Test-Path "${{ inputs.working_directory }}/helm") {
+            $chartDir = (Get-ChildItem "${{ inputs.working_directory }}/helm" -Directory | Select-Object -First 1).FullName
+          }
+
+          $valuesArg = ""
+          if ($chartDir -and (Test-Path "$chartDir/values.yaml")) {
+            $valuesArg = "-f `"$chartDir/values.yaml`""
+          }
+
+          Write-Host "🚀 Deploying ${{ inputs.image_name }} to namespace ${{ inputs.namespace }}..."
+          $cmd = "helm upgrade --install ${{ inputs.image_name }} ./am-pipelines-repo/helm/universal-chart " +
+            "--namespace ${{ inputs.namespace }} " +
+            "--set global.image.registry=`"${{ inputs.registry }}/${{ github.repository_owner }}`" " +
+            "--set global.image.tag=`"${{ github.run_number }}`" " +
+            "--set global.image.pullPolicy=`"Always`" " +
+            $valuesArg
+          Invoke-Expression $cmd
+
+      - name: Verify Rollout
+        shell: powershell
+        run: |
+          $ns = "${{ inputs.namespace }}"
+          $dep = "${{ inputs.image_name }}"
+          $timeout = "10m"
+
+          Write-Host "⏳ Waiting for rollout: $dep in namespace $ns ..."
+          kubectl rollout status deployment/$dep -n $ns --timeout=$timeout
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "❌ Rollout FAILED for $dep"
+            Write-Host ""
+            Write-Host "=== Pod Status ==="
+            kubectl get pods -n $ns
+            Write-Host ""
+            Write-Host "=== Recent Events ==="
+            kubectl get events -n $ns --sort-by='.lastTimestamp' | Select-Object -Last 20
+            exit 1
+          } else {
+            Write-Host "✅ $dep is healthy"
+          }
+
+      - name: Rollout Summary (on failure)
+        if: failure()
+        shell: powershell
+        run: |
+          Write-Host "🔍 Deployment failed. Full pod diagnostics:"
+          kubectl get pods -n ${{ inputs.namespace }} -o wide
+          Write-Host ""
+          Write-Host "--- Describe: ${{ inputs.image_name }} ---"
+          kubectl describe deployment/${{ inputs.image_name }} -n ${{ inputs.namespace }} 2>&1 | Select-Object -Last 30

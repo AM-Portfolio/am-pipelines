@@ -158,47 +158,52 @@ jobs:
           path: am-pipelines-repo
 
       - name: Deploy to Preprod via Helm
-        shell: powershell
+        shell: bash
         run: |
-          # Pick values.preprod.yaml if it exists, fall back to values.yaml
-          $valuesFile = "${{ inputs.working_directory }}/helm/values.preprod.yaml"
-          if (-not (Test-Path $valuesFile)) {
-            $valuesFile = "${{ inputs.working_directory }}/helm/values.yaml"
-          }
-          $valuesArg = if (Test-Path $valuesFile) { "-f `"$valuesFile`"" } else { "" }
+          VALUES_FILE="${{ inputs.working_directory }}/helm/values.preprod.yaml"
+          if [ ! -f "$VALUES_FILE" ]; then
+            VALUES_FILE="${{ inputs.working_directory }}/helm/values.yaml"
+          fi
+          
+          VALUES_ARG=""
+          if [ -f "$VALUES_FILE" ]; then
+            VALUES_ARG="-f \"$VALUES_FILE\""
+          fi
 
-          Write-Host "🚀 [PREPROD] Deploying ${{ inputs.image_name }} → ${{ inputs.preprod_namespace }}"
-          $cmd = "helm upgrade --install ${{ inputs.image_name }} ./am-pipelines-repo/helm/universal-chart " +
-            "--namespace ${{ inputs.preprod_namespace }} " +
-            "--create-namespace " +
-            "--set global.image.registry=`"${{ inputs.registry }}/${{ github.repository_owner }}`" " +
-            "--set global.image.tag=`"${{ github.run_number }}`" " +
-            "--set global.image.pullPolicy=`"Always`" " +
-            $valuesArg
-          Invoke-Expression $cmd
+          echo "🚀 [PREPROD] Deploying ${{ inputs.image_name }} → ${{ inputs.preprod_namespace }}"
+          
+          CMD="helm upgrade --install ${{ inputs.image_name }} ./am-pipelines-repo/helm/universal-chart \
+            --namespace ${{ inputs.preprod_namespace }} \
+            --create-namespace \
+            --set global.image.registry=\"${{ inputs.registry }}/${{ github.repository_owner }}\" \
+            --set global.image.tag=\"${{ github.run_number }}\" \
+            --set global.image.pullPolicy=\"Always\" \
+            $VALUES_ARG"
+            
+          eval "$CMD"
 
       - name: Verify Preprod Rollout
-        shell: powershell
+        shell: bash
         run: |
-          $ns  = "${{ inputs.preprod_namespace }}"
-          $dep = "${{ inputs.image_name }}"
-          Write-Host "⏳ Waiting for rollout: $dep in $ns ..."
-          kubectl rollout status deployment/$dep -n $ns --timeout=10m
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "❌ Rollout FAILED for $dep"
+          ns="${{ inputs.preprod_namespace }}"
+          dep="${{ inputs.image_name }}"
+          echo "⏳ Waiting for rollout: $dep in $ns ..."
+          
+          if ! kubectl rollout status deployment/$dep -n $ns --timeout=10m; then
+            echo "❌ Rollout FAILED for $dep"
             kubectl get pods -n $ns
-            kubectl get events -n $ns --sort-by='.lastTimestamp' | Select-Object -Last 20
+            kubectl get events -n $ns --sort-by='.lastTimestamp' | tail -n 20
             exit 1
-          }
-          Write-Host "✅ $dep is healthy in preprod"
+          fi
+          echo "✅ $dep is healthy in preprod"
 
       - name: Diagnostics on Failure
         if: failure()
-        shell: powershell
+        shell: bash
         run: |
-          Write-Host "🔍 Preprod deployment failed. Diagnostics:"
+          echo "🔍 Preprod deployment failed. Diagnostics:"
           kubectl get pods -n ${{ inputs.preprod_namespace }} -o wide
-          kubectl describe deployment/${{ inputs.image_name }} -n ${{ inputs.preprod_namespace }} 2>&1 | Select-Object -Last 30
+          kubectl describe deployment/${{ inputs.image_name }} -n ${{ inputs.preprod_namespace }} 2>&1 | tail -n 30
 
   # ============================================================
   # DEPLOY — PROD
@@ -226,44 +231,49 @@ jobs:
           path: am-pipelines-repo
 
       - name: Deploy to Prod via Helm
-        shell: powershell
+        shell: bash
         run: |
-          # Pick values.prod.yaml if it exists, fall back to values.yaml
-          $valuesFile = "${{ inputs.working_directory }}/helm/values.prod.yaml"
-          if (-not (Test-Path $valuesFile)) {
-            $valuesFile = "${{ inputs.working_directory }}/helm/values.yaml"
-          }
-          $valuesArg = if (Test-Path $valuesFile) { "-f `"$valuesFile`"" } else { "" }
+          VALUES_FILE="${{ inputs.working_directory }}/helm/values.prod.yaml"
+          if [ ! -f "$VALUES_FILE" ]; then
+            VALUES_FILE="${{ inputs.working_directory }}/helm/values.yaml"
+          fi
+          
+          VALUES_ARG=""
+          if [ -f "$VALUES_FILE" ]; then
+            VALUES_ARG="-f \"$VALUES_FILE\""
+          fi
 
-          Write-Host "🚀 [PROD] Deploying ${{ inputs.image_name }} → ${{ inputs.prod_namespace }}"
-          $cmd = "helm upgrade --install ${{ inputs.image_name }} ./am-pipelines-repo/helm/universal-chart " +
-            "--namespace ${{ inputs.prod_namespace }} " +
-            "--create-namespace " +
-            "--set global.image.registry=`"${{ inputs.registry }}/${{ github.repository_owner }}`" " +
-            "--set global.image.tag=`"${{ github.run_number }}`" " +
-            "--set global.image.pullPolicy=`"Always`" " +
-            $valuesArg
-          Invoke-Expression $cmd
+          echo "🚀 [PROD] Deploying ${{ inputs.image_name }} → ${{ inputs.prod_namespace }}"
+          
+          CMD="helm upgrade --install ${{ inputs.image_name }} ./am-pipelines-repo/helm/universal-chart \
+            --namespace ${{ inputs.prod_namespace }} \
+            --create-namespace \
+            --set global.image.registry=\"${{ inputs.registry }}/${{ github.repository_owner }}\" \
+            --set global.image.tag=\"${{ github.run_number }}\" \
+            --set global.image.pullPolicy=\"Always\" \
+            $VALUES_ARG"
+            
+          eval "$CMD"
 
       - name: Verify Prod Rollout
-        shell: powershell
+        shell: bash
         run: |
-          $ns  = "${{ inputs.prod_namespace }}"
-          $dep = "${{ inputs.image_name }}"
-          Write-Host "⏳ Waiting for rollout: $dep in $ns ..."
-          kubectl rollout status deployment/$dep -n $ns --timeout=10m
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "❌ Rollout FAILED for $dep in prod"
+          ns="${{ inputs.prod_namespace }}"
+          dep="${{ inputs.image_name }}"
+          echo "⏳ Waiting for rollout: $dep in $ns ..."
+          
+          if ! kubectl rollout status deployment/$dep -n $ns --timeout=10m; then
+            echo "❌ Rollout FAILED for $dep in prod"
             kubectl get pods -n $ns
-            kubectl get events -n $ns --sort-by='.lastTimestamp' | Select-Object -Last 20
+            kubectl get events -n $ns --sort-by='.lastTimestamp' | tail -n 20
             exit 1
-          }
-          Write-Host "✅ $dep is healthy in prod"
+          fi
+          echo "✅ $dep is healthy in prod"
 
       - name: Diagnostics on Failure
         if: failure()
-        shell: powershell
+        shell: bash
         run: |
-          Write-Host "🔍 Prod deployment failed. Diagnostics:"
+          echo "🔍 Prod deployment failed. Diagnostics:"
           kubectl get pods -n ${{ inputs.prod_namespace }} -o wide
-          kubectl describe deployment/${{ inputs.image_name }} -n ${{ inputs.prod_namespace }} 2>&1 | Select-Object -Last 30
+          kubectl describe deployment/${{ inputs.image_name }} -n ${{ inputs.prod_namespace }} 2>&1 | tail -n 30

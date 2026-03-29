@@ -173,10 +173,12 @@ jobs:
 
           echo "🚀 [PREPROD] Deploying ${{ inputs.image_name }} → ${{ inputs.preprod_namespace }}"
           
+          REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          
           CMD="helm upgrade --install ${{ inputs.image_name }} ./am-pipelines-repo/helm/universal-chart \
             --namespace ${{ inputs.preprod_namespace }} \
             --create-namespace \
-            --set global.image.registry=\"${{ inputs.registry }}/${{ github.repository_owner }}\" \
+            --set global.image.registry=\"${{ inputs.registry }}/$REPO_OWNER\" \
             --set global.image.tag=\"${{ github.run_number }}\" \
             --set global.image.pullPolicy=\"Always\" \
             $VALUES_ARG"
@@ -247,10 +249,12 @@ jobs:
 
           echo "🚀 [PROD] Deploying ${{ inputs.image_name }} → ${{ inputs.prod_namespace }}"
           
+          REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          
           CMD="helm upgrade --install ${{ inputs.image_name }} ./am-pipelines-repo/helm/universal-chart \
             --namespace ${{ inputs.prod_namespace }} \
             --create-namespace \
-            --set global.image.registry=\"${{ inputs.registry }}/${{ github.repository_owner }}\" \
+            --set global.image.registry=\"${{ inputs.registry }}/$REPO_OWNER\" \
             --set global.image.tag=\"${{ github.run_number }}\" \
             --set global.image.pullPolicy=\"Always\" \
             $VALUES_ARG"

@@ -160,14 +160,15 @@ jobs:
       - name: Deploy to Preprod via Helm
         shell: bash
         run: |
-          VALUES_FILE="${{ inputs.working_directory }}/helm/values.preprod.yaml"
-          if [ ! -f "$VALUES_FILE" ]; then
-            VALUES_FILE="${{ inputs.working_directory }}/helm/values.yaml"
-          fi
+          BASE_VALUES="${{ inputs.working_directory }}/helm/values.yaml"
+          ENV_VALUES="${{ inputs.working_directory }}/helm/values.preprod.yaml"
           
           VALUES_ARG=""
-          if [ -f "$VALUES_FILE" ]; then
-            VALUES_ARG="-f \"$VALUES_FILE\""
+          if [ -f "$BASE_VALUES" ]; then
+            VALUES_ARG="-f \"$BASE_VALUES\""
+          fi
+          if [ -f "$ENV_VALUES" ]; then
+            VALUES_ARG="$VALUES_ARG -f \"$ENV_VALUES\""
           fi
 
           echo "🚀 [PREPROD] Deploying ${{ inputs.image_name }} → ${{ inputs.preprod_namespace }}"
@@ -233,14 +234,15 @@ jobs:
       - name: Deploy to Prod via Helm
         shell: bash
         run: |
-          VALUES_FILE="${{ inputs.working_directory }}/helm/values.prod.yaml"
-          if [ ! -f "$VALUES_FILE" ]; then
-            VALUES_FILE="${{ inputs.working_directory }}/helm/values.yaml"
-          fi
+          BASE_VALUES="${{ inputs.working_directory }}/helm/values.yaml"
+          ENV_VALUES="${{ inputs.working_directory }}/helm/values.prod.yaml"
           
           VALUES_ARG=""
-          if [ -f "$VALUES_FILE" ]; then
-            VALUES_ARG="-f \"$VALUES_FILE\""
+          if [ -f "$BASE_VALUES" ]; then
+            VALUES_ARG="-f \"$BASE_VALUES\""
+          fi
+          if [ -f "$ENV_VALUES" ]; then
+            VALUES_ARG="$VALUES_ARG -f \"$ENV_VALUES\""
           fi
 
           echo "🚀 [PROD] Deploying ${{ inputs.image_name }} → ${{ inputs.prod_namespace }}"

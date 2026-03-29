@@ -207,7 +207,7 @@ jobs:
   # ============================================================
   deploy-prod:
     name: Deploy → Prod
-    needs: deploy-preprod
+    needs: build
     runs-on: self-hosted
     if: ${{ inputs.image_name != '' && inputs.deploy_prod == true }}
     environment: prod                       # ⏸ Pauses for prod approval

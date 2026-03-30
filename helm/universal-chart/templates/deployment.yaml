@@ -14,13 +14,16 @@ spec:
       labels:
         {{- include "universal-chart.selectorLabels" . | nindent 8 }}
       annotations:
-        {{- if .Values.global.vault.enabled }}
+      annotations:
+        {{- $vaultEnabled := or .Values.global.vault.enabled .Values.vault.enabled }}
+        {{- $vaultSecrets := merge (default (dict) .Values.global.vault.secrets) (default (dict) .Values.vault.secretPaths) }}
+        {{- if $vaultEnabled }}
         # Vault Agent Sidecar Injector
         vault.hashicorp.com/agent-inject: "true"
-        vault.hashicorp.com/role: {{ .Values.global.vault.role | quote }}
-        vault.hashicorp.com/auth-path: {{ .Values.global.vault.authPath | quote }}
+        vault.hashicorp.com/role: {{ default .Values.global.vault.role .Values.vault.role | default "default-role" | quote }}
+        vault.hashicorp.com/auth-path: {{ default .Values.global.vault.authPath .Values.vault.authPath | default "auth/kubernetes" | quote }}
         vault.hashicorp.com/agent-pre-populate-only: "false"
-        {{- range $k, $v := .Values.global.vault.secrets }}
+        {{- range $k, $v := $vaultSecrets }}
         vault.hashicorp.com/agent-inject-secret-{{ $k }}: {{ if kindIs "string" $v }}{{ $v | quote }}{{ else }}{{ $v.path | quote }}{{ end }}
         vault.hashicorp.com/agent-inject-template-{{ $k }}: |
           {{`{{`}}- with secret {{ if kindIs "string" $v }}{{ $v | quote }}{{ else }}{{ $v.path | quote }}{{ end }} {{`}}`}}
@@ -37,7 +40,7 @@ spec:
         {{- end }}
         {{- end }}
     spec:
-      {{- if .Values.global.vault.enabled }}
+      {{- if $vaultEnabled }}
       serviceAccountName: {{ include "universal-chart.fullname" . }}-vault-sa
       {{- end }}
       containers:
@@ -46,11 +49,11 @@ spec:
           imagePullPolicy: {{ .Values.global.image.pullPolicy }}
           ports:
             - containerPort: {{ .Values.port }}
-          {{- if .Values.global.vault.enabled }}
+          {{- if $vaultEnabled }}
           command: ["/bin/sh", "-c"]
           args:
             - |
-              {{- range $k, $v := .Values.global.vault.secrets }}
+              {{- range $k, $v := $vaultSecrets }}
               . /vault/secrets/{{ $k }} 2>/dev/null || true
               {{- end }}
               {{- if eq .Values.language "java" }}

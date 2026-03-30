@@ -124,12 +124,12 @@ jobs:
           echo "Building $IMAGE_ID ..."
           docker build -f Dockerfile \
             --build-arg BASE_REGISTRY=$BASE_REG \
-            -t $IMAGE_ID:${{ github.run_number }} \
+            -t $IMAGE_ID:${{ github.run_id }} \
             -t $IMAGE_ID:latest \
             ${{ inputs.build_context }}
 
           echo "Pushing $IMAGE_ID ..."
-          docker push $IMAGE_ID:${{ github.run_number }}
+          docker push $IMAGE_ID:${{ github.run_id }}
           docker push $IMAGE_ID:latest
 
   # ============================================================
@@ -179,7 +179,7 @@ jobs:
             --namespace ${{ inputs.preprod_namespace }} \
             --create-namespace \
             --set global.image.registry=\"${{ inputs.registry }}/$REPO_OWNER\" \
-            --set global.image.tag=\"${{ github.run_number }}\" \
+            --set global.image.tag=\"${{ github.run_id }}\" \
             --set global.image.pullPolicy=\"Always\" \
             --set language=${{ inputs.language }} \
             $VALUES_ARG"
@@ -256,7 +256,7 @@ jobs:
             --namespace ${{ inputs.prod_namespace }} \
             --create-namespace \
             --set global.image.registry=\"${{ inputs.registry }}/$REPO_OWNER\" \
-            --set global.image.tag=\"${{ github.run_number }}\" \
+            --set global.image.tag=\"${{ github.run_id }}\" \
             --set global.image.pullPolicy=\"Always\" \
             --set language=${{ inputs.language }} \
             $VALUES_ARG"

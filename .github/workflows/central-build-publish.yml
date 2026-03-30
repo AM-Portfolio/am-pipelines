@@ -64,8 +64,8 @@ jobs:
         if: ${{ inputs.language == 'java' }}
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
-          distribution: 'temurin'
+          java-version: "17"
+          distribution: "temurin"
           cache: maven
           server-id: github-investment
           server-username: GITHUB_ACTOR
@@ -88,8 +88,8 @@ jobs:
         if: ${{ inputs.language == 'python' }}
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-          cache: 'pip'
+          python-version: "3.10"
+          cache: "pip"
 
       - name: Install Python Dependencies
         if: ${{ inputs.language == 'python' }}
@@ -142,7 +142,7 @@ jobs:
     needs: build
     runs-on: self-hosted
     if: ${{ inputs.image_name != '' }}
-    environment: preprod                    # ⏸ Pauses for preprod approval
+    environment: preprod # ⏸ Pauses for preprod approval
     permissions:
       contents: read
       packages: write
@@ -162,7 +162,7 @@ jobs:
         run: |
           BASE_VALUES="${{ inputs.working_directory }}/helm/values.yaml"
           ENV_VALUES="${{ inputs.working_directory }}/helm/values.preprod.yaml"
-          
+
           VALUES_ARG=""
           if [ -f "$BASE_VALUES" ]; then
             VALUES_ARG="-f \"$BASE_VALUES\""
@@ -172,15 +172,16 @@ jobs:
           fi
 
           echo "🚀 [PREPROD] Deploying ${{ inputs.image_name }} → ${{ inputs.preprod_namespace }}"
-          
+
           REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          
+
           CMD="helm upgrade --install ${{ inputs.image_name }} ./am-pipelines-repo/helm/universal-chart \
             --namespace ${{ inputs.preprod_namespace }} \
             --create-namespace \
             --set global.image.registry=\"${{ inputs.registry }}/$REPO_OWNER\" \
             --set global.image.tag=\"${{ github.run_number }}\" \
             --set global.image.pullPolicy=\"Always\" \
+            --set language=${{ inputs.language }} \
             $VALUES_ARG"
             
           eval "$CMD"
@@ -191,7 +192,7 @@ jobs:
           ns="${{ inputs.preprod_namespace }}"
           dep="${{ inputs.image_name }}"
           echo "⏳ Waiting for rollout: $dep in $ns ..."
-          
+
           if ! kubectl rollout status deployment/$dep -n $ns --timeout=10m; then
             echo "❌ Rollout FAILED for $dep"
             kubectl get pods -n $ns
@@ -218,7 +219,7 @@ jobs:
     needs: build
     runs-on: self-hosted
     if: ${{ inputs.image_name != '' && inputs.deploy_prod == true }}
-    environment: prod                       # ⏸ Pauses for prod approval
+    environment: prod # ⏸ Pauses for prod approval
     permissions:
       contents: read
       packages: write
@@ -238,7 +239,7 @@ jobs:
         run: |
           BASE_VALUES="${{ inputs.working_directory }}/helm/values.yaml"
           ENV_VALUES="${{ inputs.working_directory }}/helm/values.prod.yaml"
-          
+
           VALUES_ARG=""
           if [ -f "$BASE_VALUES" ]; then
             VALUES_ARG="-f \"$BASE_VALUES\""
@@ -248,15 +249,16 @@ jobs:
           fi
 
           echo "🚀 [PROD] Deploying ${{ inputs.image_name }} → ${{ inputs.prod_namespace }}"
-          
+
           REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          
+
           CMD="helm upgrade --install ${{ inputs.image_name }} ./am-pipelines-repo/helm/universal-chart \
             --namespace ${{ inputs.prod_namespace }} \
             --create-namespace \
             --set global.image.registry=\"${{ inputs.registry }}/$REPO_OWNER\" \
             --set global.image.tag=\"${{ github.run_number }}\" \
             --set global.image.pullPolicy=\"Always\" \
+            --set language=${{ inputs.language }} \
             $VALUES_ARG"
             
           eval "$CMD"
@@ -267,7 +269,7 @@ jobs:
           ns="${{ inputs.prod_namespace }}"
           dep="${{ inputs.image_name }}"
           echo "⏳ Waiting for rollout: $dep in $ns ..."
-          
+
           if ! kubectl rollout status deployment/$dep -n $ns --timeout=10m; then
             echo "❌ Rollout FAILED for $dep in prod"
             kubectl get pods -n $ns

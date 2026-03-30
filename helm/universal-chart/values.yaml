@@ -12,6 +12,8 @@ global:
 environment: default
 replicaCount: 1
 
+language: python
+
 image:
   repository: ""
 

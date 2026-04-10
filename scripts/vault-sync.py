@@ -27,7 +27,7 @@ class VaultSyncEngine:
         self.token, self.addr = self._discover_creds(token, addr)
         if not self.token:
             raise ValueError("Vault Token not found. Set VAULT_TOKEN or ensure am-infra is initialized.")
-        print(f"🔗 Connected to Vault at {self.addr}")
+        print(f"Connected to Vault at {self.addr}")
 
     def _discover_creds(self, token, addr):
         """Discovers Vault credentials from standard locations."""
@@ -64,7 +64,7 @@ class VaultSyncEngine:
 
     def sync_path(self, vault_path, secrets):
         headers = {"X-Vault-Token": self.token, "Content-Type": "application/json"}
-        url = f"{self.addr}/v1/kv/data/{vault_path}"
+        url = f"{self.addr}/v1/secret/data/{vault_path}"
         
         existing = {}
         try:
@@ -74,7 +74,7 @@ class VaultSyncEngine:
         except: pass
 
         if existing == secrets:
-            print(f"✅ kv/{vault_path} up to date.")
+            print(f"INFO: kv/{vault_path} up to date.")
             return
 
         existing.update(secrets)
@@ -83,9 +83,9 @@ class VaultSyncEngine:
             req_post = urllib.request.Request(url, headers=headers, data=data_bytes, method="POST")
             with urllib.request.urlopen(req_post) as res_post:
                 if res_post.status in [200, 204]:
-                    print(f"🎉 Successfully synced {len(secrets)} keys to kv/{vault_path}")
+                    print(f"DONE: Successfully synced {len(secrets)} keys to kv/{vault_path}")
         except Exception as e:
-            print(f"❌ Failed to sync: {e}")
+            print(f"ERROR: Failed to sync: {e}")
 
 def main():
     parser = argparse.ArgumentParser(description="Professional Vault Project Sync Engine")
@@ -98,10 +98,10 @@ def main():
     engine = VaultSyncEngine()
 
     if args.project:
-        print(f"🚀 Starting Project Synchronization: {args.project}...")
+        print(f"START: Starting Project Synchronization: {args.project}...")
         secrets = engine.load_env(args.project)
         if not secrets:
-            print(f"❌ Error: {args.project} not found or empty.")
+            print(f"ERROR: {args.project} not found or empty.")
             sys.exit(1)
 
         # Distribute secrets based on prefix
@@ -118,7 +118,7 @@ def main():
                     mapped = True
                     break
             if not mapped:
-                print(f"⚠️ Warning: No prefix mapping for key '{k}'. Use UPSTOX_, ZERODHA_, MONGO_, etc.")
+                print(f"WARN: No prefix mapping for key '{k}'. Use UPSTOX_, ZERODHA_, MONGO_, etc.")
 
         for path, data in distributed.items():
             engine.sync_path(path, data)
@@ -127,7 +127,7 @@ def main():
         secrets = engine.load_env(args.file)
         if secrets: engine.sync_path(args.path, secrets)
     else:
-        print("💡 Usage: python3 vault-sync.py --project .env.secrets  OR  <path> --file <env-file>")
+        print("HELP: Usage: python3 vault-sync.py --project .env.secrets  OR  <path> --file <env-file>")
         sys.exit(1)
 
 if __name__ == "__main__":

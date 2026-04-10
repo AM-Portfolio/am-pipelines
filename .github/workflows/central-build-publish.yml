@@ -44,28 +44,26 @@ on:
 jobs:
   # ============================================================
   # SECURITY SCAN — GitHub-hosted runner
-  # Scans for secrets (tokens, keys) using Gitleaks
+  # Scans for secrets (tokens, keys) using TruffleHog OSS
   # ============================================================
   security-scan:
     name: Security Scan (Secrets)
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      actions: read
-      security-events: write
-
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Important for deep history scan if needed
+          fetch-depth: 0 # TruffleHog needs history to find leaks
 
-      - name: Gitleaks Scan
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: TruffleHog OSS Scan
+        uses: trufflesecurity/trufflehog@main
         with:
-          # This creates the "beautiful UI" table in the job summary
-          enable_summary: true
+          path: ./
+          base: ${{ github.event.repository.default_branch }}
+          head: HEAD
+          extra_args: --debug --only-verified
 
   # ============================================================
   # BUILD — GitHub-hosted runner

@@ -10,13 +10,12 @@ spec:
     matchLabels:
       {{- include "universal-chart.selectorLabels" . | nindent 6 }}
   template:
+    {{- $vaultEnabled := or .Values.global.vault.enabled .Values.vault.enabled }}
+    {{- $vaultSecrets := merge (default (dict) .Values.global.vault.secrets) (default (dict) .Values.vault.secretPaths) }}
     metadata:
       labels:
         {{- include "universal-chart.selectorLabels" . | nindent 8 }}
       annotations:
-      annotations:
-        {{- $vaultEnabled := or .Values.global.vault.enabled .Values.vault.enabled }}
-        {{- $vaultSecrets := merge (default (dict) .Values.global.vault.secrets) (default (dict) .Values.vault.secretPaths) }}
         {{- if $vaultEnabled }}
         # Vault Agent Sidecar Injector
         vault.hashicorp.com/agent-inject: "true"
@@ -26,22 +25,22 @@ spec:
         {{- range $k, $v := $vaultSecrets }}
         vault.hashicorp.com/agent-inject-secret-{{ $k }}: {{ if kindIs "string" $v }}{{ $v | quote }}{{ else }}{{ $v.path | quote }}{{ end }}
         vault.hashicorp.com/agent-inject-template-{{ $k }}: |
-          {{`{{`}}- with secret {{ if kindIs "string" $v }}{{ $v | quote }}{{ else }}{{ $v.path | quote }}{{ end }} {{`}}`}}
+          {{`{{- with secret `}} {{ if kindIs "string" $v }}{{ $v | quote }}{{ else }}{{ $v.path | quote }}{{ end }} {{` -}}` }}
           {{- if and (not (kindIs "string" $v)) $v.keys }}
           {{- range $varName := $v.keys }}
           export {{ $varName }}="{{`{{`}} index .Data.data {{ $varName | quote }} {{`}}`}}"
           {{- end }}
           {{- else }}
-          {{`{{`}}- range $sk, $sv := .Data.data {{`}}`}}
-          export {{`{{`}} $sk {{`}}`}}="{{`{{`}} $sv {{`}}`}}"
-          {{`{{`}} end {{`}}`}}
+          {{`{{- range $sk, $sv := .Data.data }}`}}
+          export {{`{{ $sk }}`}}="{{`{{ $sv }}`}}"
+          {{`{{- end }}`}}
           {{- end }}
-          {{`{{`}} end {{`}}`}}
+          {{`{{- end }}`}}
         {{- end }}
         {{- end }}
     spec:
       {{- if $vaultEnabled }}
-      serviceAccountName: {{ include "universal-chart.fullname" . }}-vault-sa
+      serviceAccountName: {{ .Values.global.vault.serviceAccountName | default (printf "%s-vault-sa" (include "universal-chart.fullname" .)) }}
       {{- end }}
       containers:
         - name: {{ include "universal-chart.fullname" . }}
@@ -61,7 +60,7 @@ spec:
               {{- else if eq .Values.language "flutter" }}
               exec nginx -g "daemon off;"
               {{- else }}
-              exec uvicorn am_api.api:app --host 0.0.0.0 --port {{ .Values.port }}
+              {{ default (printf "exec uvicorn am_api.api:app --host 0.0.0.0 --port %v" .Values.port) .Values.entrypoint }}
               {{- end }}
           {{- end }}
           env:
@@ -73,8 +72,10 @@ spec:
               value: {{ $v | quote }}
             {{- end }}
             {{- end }}
+          {{- if .Values.resources }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+          {{- end }}
           livenessProbe:
             httpGet:
               path: /health

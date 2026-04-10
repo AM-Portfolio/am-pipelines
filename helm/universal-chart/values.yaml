@@ -5,8 +5,9 @@ global:
     pullPolicy: IfNotPresent
   vault:
     enabled: false
-    role: default-role
+    role: dev-role
     authPath: auth/kubernetes
+    serviceAccountName: ""   # Set to existing SA name (e.g. am-backend-sa) to skip SA creation
     secrets: {}
 
 environment: default
@@ -18,6 +19,9 @@ image:
   repository: ""
 
 port: 8080
+
+# Optional explicit command to override language defaults
+entrypoint: ""
 
 resources: {}
 env: {}

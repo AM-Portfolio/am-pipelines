@@ -64,6 +64,30 @@ jobs:
           extra_args: --only-verified
 
   # ============================================================
+  # MISCONFIG SCAN (IaC) — GitHub-hosted runner
+  # Scans Helm charts and Terraform for security misconfigurations
+  # ============================================================
+  misconfig-scan:
+    name: Security Scan (IaC)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Checkov Scan
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: ./
+          framework: helm,terraform,kubernetes
+          soft_fail: false # Set to true if you don't want to block build initially
+          quiet: true
+          output_format: cli,sarif
+          download_external_modules: true
+          log_level: ERROR
+
+  # ============================================================
   # BUILD — GitHub-hosted runner
   # Compiles, tests, builds and pushes Docker image to GHCR
   # ============================================================
@@ -158,13 +182,33 @@ jobs:
           docker push $IMAGE_ID:latest
 
   # ============================================================
+  # VULNERABILITY SCAN — GitHub-hosted runner
+  # Scans the built Docker image for CVEs
+  # ============================================================
+  vulnerability-scan:
+    name: Security Scan (Vulnerabilities)
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'ghcr.io/${{ github.repository_owner }}/${{ inputs.image_name }}:${{ github.run_id }}'
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1' # Fail the job if vulnerabilities are found
+
+  # ============================================================
   # DEPLOY — PREPROD
   # Self-hosted runner | environment: preprod (requires approval)
   # Helm upgrade → kubectl rollout verify
   # ============================================================
   deploy-preprod:
     name: Deploy → Preprod
-    needs: build
+    needs: [build, vulnerability-scan, misconfig-scan]
     runs-on: self-hosted
     if: ${{ inputs.image_name != '' }}
     environment: preprod-${{ inputs.image_name }} # ⏸ Pauses for preprod approval

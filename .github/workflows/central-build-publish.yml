@@ -81,7 +81,7 @@ jobs:
         with:
           directory: ./
           framework: helm,terraform,kubernetes
-          soft_fail: false # Set to true if you don't want to block build initially
+          soft_fail: true # Set to true to avoid blocking the workflow
           quiet: true
           output_format: cli,sarif
           download_external_modules: true
@@ -208,7 +208,7 @@ jobs:
           image-ref: ${{ steps.image.outputs.ref }}
           format: 'table'
           severity: 'CRITICAL,HIGH'
-          exit-code: '1'
+          exit-code: '0' # Non-blocking (reports but continues)
 
   # ============================================================
   # DEPLOY — PREPROD

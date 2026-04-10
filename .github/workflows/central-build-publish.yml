@@ -217,7 +217,7 @@ jobs:
   # ============================================================
   deploy-preprod:
     name: Deploy → Preprod
-    needs: [build, vulnerability-scan, misconfig-scan]
+    needs: [build, vulnerability-scan, misconfig-scan, security-scan]
     runs-on: self-hosted
     if: ${{ inputs.image_name != '' }}
     environment: preprod-${{ inputs.image_name }} # ⏸ Pauses for preprod approval
@@ -294,7 +294,7 @@ jobs:
   # ============================================================
   deploy-prod:
     name: Deploy → Prod
-    needs: build
+    needs: [deploy-preprod, vulnerability-scan, misconfig-scan, security-scan]
     runs-on: self-hosted
     if: ${{ inputs.image_name != '' && inputs.deploy_prod == true }}
     environment: prod-${{ inputs.image_name }} # ⏸ Pauses for prod approval

@@ -122,7 +122,7 @@ jobs:
           BASE_REG=$(echo $BASE_REG | tr '[A-Z]' '[a-z]')
 
           echo "Building $IMAGE_ID ..."
-          docker build -f ${{ inputs.working_directory }}/Dockerfile \
+          docker build -f Dockerfile \
             --build-arg BASE_REGISTRY=$BASE_REG \
             -t $IMAGE_ID:${{ github.run_id }} \
             -t $IMAGE_ID:latest \

@@ -111,7 +111,11 @@ jobs:
         with:
           registry: ${{ inputs.registry }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          # GITHUB_PAT is a fine-grained org-level PAT with read:packages scope,
+          # required when pulling base images from other repos (e.g. am-python-base
+          # lives in am-market but is pulled from am-auth builds).
+          # Falls back to GITHUB_TOKEN for same-repo package access.
+          password: ${{ secrets.GITHUB_PAT || secrets.GITHUB_TOKEN }}
 
       - name: Build and Push Docker Image
         if: ${{ inputs.image_name != '' }}

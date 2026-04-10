@@ -20,8 +20,18 @@ image:
 
 port: 8080
 
-# Optional explicit command to override language defaults
-entrypoint: ""
+# Security Defaults (Professional Standards)
+security:
+  automountServiceAccountToken: false
+  readOnlyRootFilesystem: false
 
-resources: {}
+# Professional Resource Limits (Satisfies CKV_K8S_21/22/31)
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
 env: {}

@@ -193,13 +193,22 @@ jobs:
       contents: read
       packages: read
     steps:
+      - name: Lowercase Image Ref
+        id: image
+        run: |
+          ref="ghcr.io/${{ github.repository_owner }}/${{ inputs.image_name }}:${{ github.run_id }}"
+          echo "ref=$(echo $ref | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         with:
-          image-ref: 'ghcr.io/${{ github.repository_owner }}/${{ inputs.image_name }}:${{ github.run_id }}'
+          image-ref: ${{ steps.image.outputs.ref }}
           format: 'table'
           severity: 'CRITICAL,HIGH'
-          exit-code: '1' # Fail the job if vulnerabilities are found
+          exit-code: '1'
 
   # ============================================================
   # DEPLOY — PREPROD

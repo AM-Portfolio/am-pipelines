@@ -42,8 +42,19 @@ spec:
       {{- if $vaultEnabled }}
       serviceAccountName: {{ .Values.global.vault.serviceAccountName | default (printf "%s-vault-sa" (include "universal-chart.fullname" .)) }}
       {{- end }}
+      automountServiceAccountToken: {{ .Values.security.automountServiceAccountToken | default false }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
       containers:
         - name: {{ include "universal-chart.fullname" . }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: {{ .Values.security.readOnlyRootFilesystem | default false }}
+            capabilities:
+              drop:
+                - ALL
           image: "{{ .Values.global.image.registry }}/{{ .Values.image.repository }}:{{ .Values.global.image.tag }}"
           imagePullPolicy: {{ .Values.global.image.pullPolicy }}
           ports:

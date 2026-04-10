@@ -10,8 +10,8 @@ spec:
     matchLabels:
       {{- include "universal-chart.selectorLabels" . | nindent 6 }}
   template:
-    {{- $vaultEnabled := or .Values.global.vault.enabled .Values.vault.enabled }}
-    {{- $vaultSecrets := merge (default (dict) .Values.global.vault.secrets) (default (dict) .Values.vault.secretPaths) }}
+    {{- $vaultEnabled := or .Values.global.vault.enabled (dig "vault" "enabled" false .Values) }}
+    {{- $vaultSecrets := merge (default (dict) .Values.global.vault.secrets) (dig "vault" "secretPaths" (dict) .Values) }}
     metadata:
       labels:
         {{- include "universal-chart.selectorLabels" . | nindent 8 }}
@@ -19,8 +19,8 @@ spec:
         {{- if $vaultEnabled }}
         # Vault Agent Sidecar Injector
         vault.hashicorp.com/agent-inject: "true"
-        vault.hashicorp.com/role: {{ default .Values.global.vault.role .Values.vault.role | default "default-role" | quote }}
-        vault.hashicorp.com/auth-path: {{ default .Values.global.vault.authPath .Values.vault.authPath | default "auth/kubernetes" | quote }}
+        vault.hashicorp.com/role: {{ dig "vault" "role" .Values.global.vault.role .Values | default "am-backend-role" | quote }}
+        vault.hashicorp.com/auth-path: {{ dig "vault" "authPath" .Values.global.vault.authPath .Values | default "auth/kubernetes" | quote }}
         vault.hashicorp.com/agent-pre-populate-only: "false"
         {{- range $k, $v := $vaultSecrets }}
         vault.hashicorp.com/agent-inject-secret-{{ $k }}: {{ if kindIs "string" $v }}{{ $v | quote }}{{ else }}{{ $v.path | quote }}{{ end }}

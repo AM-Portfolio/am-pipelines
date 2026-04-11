@@ -1,0 +1,95 @@
+name: Central Deployment Engine
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        required: true
+        type: string
+        description: "Name of the service (Deployment name)"
+      working_directory:
+        required: true
+        type: string
+        description: "Path to the service directory relative to repo root"
+      language:
+        required: true
+        type: string
+        description: "Primary language (java, python, flutter)"
+      environment:
+        required: true
+        type: string
+        description: "Target environment (preprod, prod)"
+      image_tag:
+        required: false
+        type: string
+        default: "latest"
+        description: "Docker image tag to deploy"
+      namespace:
+        required: true
+        type: string
+        description: "Kubernetes namespace"
+      registry:
+        required: false
+        type: string
+        default: "ghcr.io"
+
+jobs:
+  deploy:
+    name: Deploy → ${{ inputs.environment }}
+    runs-on: self-hosted
+    environment: ${{ inputs.environment }}-${{ inputs.service_name }} # approval gate
+    
+    steps:
+      - name: Checkout Application Repo
+        uses: actions/checkout@v4
+
+      - name: Checkout Universal Helm Chart (am-pipelines)
+        uses: actions/checkout@v4
+        with:
+          repository: AM-Portfolio/am-pipelines
+          path: am-pipelines-repo
+
+      - name: Deploy via Helm
+        shell: bash
+        run: |
+          BASE_VALUES="${{ inputs.working_directory }}/helm/values.yaml"
+          ENV_VALUES="${{ inputs.working_directory }}/helm/values.${{ inputs.environment }}.yaml"
+
+          VALUES_ARG=""
+          if [ -f "$BASE_VALUES" ]; then
+            VALUES_ARG="-f \"$BASE_VALUES\""
+          fi
+          # Check for env specific values (supports both preprod and prod)
+          if [ -f "$ENV_VALUES" ]; then
+            VALUES_ARG="$VALUES_ARG -f \"$ENV_VALUES\""
+          fi
+
+          echo "🚀 [${{ inputs.environment }}] Deploying ${{ inputs.service_name }} ..."
+          
+          REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+
+          CMD="helm upgrade --install ${{ inputs.service_name }} ./am-pipelines-repo/helm/universal-chart \
+            --namespace ${{ inputs.namespace }} \
+            --create-namespace \
+            --set global.image.registry=\"${{ inputs.registry }}/$REPO_OWNER\" \
+            --set global.image.tag=\"${{ inputs.image_tag }}\" \
+            --set global.image.pullPolicy=\"Always\" \
+            --set language=${{ inputs.language }} \
+            $VALUES_ARG"
+            
+          eval "$CMD"
+
+      - name: Verify Rollout
+        shell: bash
+        run: |
+          ns="${{ inputs.namespace }}"
+          dep="${{ inputs.service_name }}"
+          echo "⏳ Waiting for rollout: $dep in $ns ..."
+
+          if ! kubectl rollout status deployment/$dep -n $ns --timeout=10m; then
+            echo "❌ Rollout FAILED for $dep"
+            kubectl get pods -n $ns
+            kubectl get events -n $ns --sort-by='.lastTimestamp' | tail -n 20
+            exit 1
+          fi
+          echo "✅ $dep is healthy in ${{ inputs.environment }}"

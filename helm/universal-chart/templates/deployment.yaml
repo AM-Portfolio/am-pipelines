@@ -26,7 +26,9 @@ spec:
         vault.hashicorp.com/agent-inject-secret-{{ $k }}: {{ if kindIs "string" $v }}{{ $v | quote }}{{ else }}{{ $v.path | quote }}{{ end }}
         vault.hashicorp.com/agent-inject-template-{{ $k }}: |
           {{`{{- with secret `}} {{ if kindIs "string" $v }}{{ $v | quote }}{{ else }}{{ $v.path | quote }}{{ end }} {{` -}}` }}
-          {{- if and (not (kindIs "string" $v)) $v.keys }}
+          {{- if and (not (kindIs "string" $v)) $v.template }}
+          {{ $v.template | nindent 10 }}
+          {{- else if and (not (kindIs "string" $v)) $v.keys }}
           {{- range $varName := $v.keys }}
           export {{ $varName }}="{{`{{`}} index .Data.data {{ $varName | quote }} {{`}}`}}"
           {{- end }}

@@ -91,9 +91,17 @@ spec:
           {{- end }}
           livenessProbe:
             httpGet:
-              path: /health
-              port: {{ .Values.port }}
-            initialDelaySeconds: 30
-            periodSeconds: 30
-            timeoutSeconds: 10
-            failureThreshold: 3
+              path: {{ .Values.probes.liveness.path | default "/health" }}
+              port: {{ .Values.probes.port | default .Values.port }}
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds | default 30 }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds | default 30 }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds | default 10 }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold | default 3 }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readiness.path | default "/health" }}
+              port: {{ .Values.probes.port | default .Values.port }}
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds | default 5 }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds | default 10 }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds | default 5 }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold | default 3 }}

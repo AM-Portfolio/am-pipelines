@@ -164,6 +164,8 @@ jobs:
 
       - name: Build and Push Docker Image
         if: ${{ inputs.image_name != '' }}
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           IMAGE_ID=${{ inputs.registry }}/${{ github.repository_owner }}/${{ inputs.image_name }}
           IMAGE_ID=$(echo $IMAGE_ID | tr '[A-Z]' '[a-z]')
@@ -173,6 +175,8 @@ jobs:
           echo "Building $IMAGE_ID ..."
           docker build -f Dockerfile \
             --build-arg BASE_REGISTRY=$BASE_REG \
+            --build-arg GITHUB_PACKAGES_USERNAME=${{ github.actor }} \
+            --build-arg GITHUB_PACKAGES_TOKEN=${GHCR_TOKEN} \
             -t $IMAGE_ID:${{ github.run_id }} \
             -t $IMAGE_ID:latest \
             ${{ inputs.build_context }}

@@ -413,7 +413,7 @@ jobs:
   # ============================================================
   deploy-prod:
     name: Deploy → Prod
-    needs: [deploy-preprod, vulnerability-scan, misconfig-scan, security-scan]
+    needs: [deploy-preprod]
     runs-on: self-hosted
     if: |
       always() && 

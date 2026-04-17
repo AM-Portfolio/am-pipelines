@@ -244,9 +244,9 @@ jobs:
           TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         with:
           image-ref: ${{ steps.image.outputs.ref }}
-          format: 'table'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '0' # Non-blocking (reports but continues)
+          format: "table"
+          severity: "CRITICAL,HIGH"
+          exit-code: "0" # Non-blocking (reports but continues)
 
   # ============================================================
   # DEPLOY — DEV
@@ -333,7 +333,7 @@ jobs:
   # ============================================================
   deploy-preprod:
     name: Deploy → Preprod
-    needs: [deploy-dev, vulnerability-scan, misconfig-scan, security-scan]
+    needs: [vulnerability-scan, misconfig-scan, security-scan]
     runs-on: self-hosted
     if: |
       always() && 

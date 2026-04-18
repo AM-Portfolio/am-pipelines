@@ -79,6 +79,7 @@ jobs:
   # ============================================================
   misconfig-scan:
     name: Security Scan (IaC)
+
     runs-on: ubuntu-latest
     permissions:
       contents: read

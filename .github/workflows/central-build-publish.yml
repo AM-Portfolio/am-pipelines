@@ -257,7 +257,7 @@ jobs:
   deploy-dev:
     name: Deploy → Dev
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
-    runs-on: self-hosted
+    runs-on: docker-runner-github-runner-6d445b6f69-xz6jb
     if: ${{ inputs.image_name != '' && inputs.deploy_dev == true }}
     environment: dev-${{ inputs.image_name }} # Tracking only (no approval by default)
     permissions:
@@ -334,12 +334,9 @@ jobs:
   # ============================================================
   deploy-preprod:
     name: Deploy → Preprod
-    needs: [vulnerability-scan, misconfig-scan, security-scan]
-    runs-on: self-hosted
-    if: |
-      always() && 
-      needs.deploy-dev.result == 'success' && 
-      inputs.image_name != ''
+    needs: [build, vulnerability-scan, misconfig-scan, security-scan]
+    runs-on: docker-runner-github-runner-6d445b6f69-xz6jb
+    if: ${{ inputs.image_name != '' }}
     environment: preprod-${{ inputs.image_name }} # ⏸ Pauses for preprod approval
     permissions:
       contents: read
@@ -415,7 +412,7 @@ jobs:
   deploy-prod:
     name: Deploy → Prod
     needs: [deploy-preprod]
-    runs-on: self-hosted
+    runs-on: docker-runner-github-runner-6d445b6f69-xz6jb
     if: |
       always() && 
       needs.deploy-preprod.result == 'success' && 

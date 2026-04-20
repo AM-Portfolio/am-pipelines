@@ -41,6 +41,10 @@ spec:
         {{- end }}
         {{- end }}
     spec:
+      {{- with .Values.global.image.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- if $vaultEnabled }}
       serviceAccountName: {{ .Values.global.vault.serviceAccountName | default (printf "%s-vault-sa" (include "universal-chart.fullname" .)) }}
       {{- end }}

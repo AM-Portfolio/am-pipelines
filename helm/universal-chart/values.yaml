@@ -3,6 +3,7 @@ global:
     registry: ghcr.io/AM-Portfolio
     tag: latest
     pullPolicy: IfNotPresent
+    imagePullSecrets: []
   vault:
     enabled: false
     role: dev-role

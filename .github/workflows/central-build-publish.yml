@@ -154,14 +154,14 @@ jobs:
       - name: Build Java Package
         if: ${{ inputs.language == 'java' }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
           GITHUB_ACTOR: ${{ github.actor }}
         run: mvn clean package -DskipTests
 
       - name: Run Java Tests
         if: ${{ inputs.language == 'java' }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
         run: mvn test || echo "Test step failed or skipped"
 
       # ── Python ────────────────────────────────────────────
@@ -195,12 +195,12 @@ jobs:
           # GHCR_TOKEN is an org-level PAT with read:packages scope, passed via
           # secrets: inherit. Enables cross-repo pulls (e.g. am-python-base from
           # am-market). Falls back to GITHUB_TOKEN for same-repo package access.
-          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Build and Push Docker Image
         if: ${{ inputs.image_name != '' }}
         env:
-          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           IMAGE_ID=${{ inputs.registry }}/${{ github.repository_owner }}/${{ inputs.image_name }}
           IMAGE_ID=$(echo $IMAGE_ID | tr '[A-Z]' '[a-z]')
@@ -242,7 +242,7 @@ jobs:
         uses: aquasecurity/trivy-action@master
         env:
           TRIVY_USERNAME: ${{ github.actor }}
-          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          TRIVY_PASSWORD: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
         with:
           image-ref: ${{ steps.image.outputs.ref }}
           format: "table"

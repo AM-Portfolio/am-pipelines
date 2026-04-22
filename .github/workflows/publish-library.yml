@@ -163,7 +163,7 @@ jobs:
         run: |
           mvn -B clean deploy -DskipTests
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
           GITHUB_ACTOR: ${{ github.actor }}
 
       # ═══════════════════════════════════════════════════════════════════════

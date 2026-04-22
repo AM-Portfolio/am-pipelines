@@ -46,9 +46,9 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- if $vaultEnabled }}
-      serviceAccountName: {{ .Values.global.vault.serviceAccountName | default (printf "%s-vault-sa" (include "universal-chart.fullname" .)) }}
+      serviceAccountName: {{ and .Values.vault .Values.vault.serviceAccountName | default .Values.global.vault.serviceAccountName | default (printf "%s-vault-sa" (include "universal-chart.fullname" .)) }}
       {{- end }}
-      automountServiceAccountToken: {{ .Values.security.automountServiceAccountToken | default false }}
+      automountServiceAccountToken: {{ .Values.security.automountServiceAccountToken | default $vaultEnabled }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000

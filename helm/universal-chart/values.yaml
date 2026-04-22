@@ -1,6 +1,6 @@
 global:
   image:
-    registry: ghcr.io/AM-Portfolio
+    registry: ghcr.io/am-portfolio
     tag: latest
     pullPolicy: IfNotPresent
     imagePullSecrets: []
@@ -8,7 +8,7 @@ global:
     enabled: false
     role: dev-role
     authPath: auth/kubernetes
-    serviceAccountName: ""   # Set to existing SA name (e.g. am-backend-sa) to skip SA creation
+    serviceAccountName: "" # Set to existing SA name (e.g. am-backend-sa) to skip SA creation
     secrets: {}
 
 environment: default

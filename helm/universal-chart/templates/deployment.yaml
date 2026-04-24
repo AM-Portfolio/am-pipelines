@@ -19,7 +19,7 @@ spec:
         {{- if $vaultEnabled }}
         # Vault Agent Sidecar Injector
         vault.hashicorp.com/agent-inject: "true"
-        vault.hashicorp.com/role: {{ and .Values.vault .Values.vault.role | default .Values.global.vault.role | default "am-backend-role" | quote }}
+        vault.hashicorp.com/role: {{ and .Values.vault .Values.vault.role | default .Values.global.vault.role | default (printf "am-%s-role" (include "universal-chart.fullname" .)) | quote }}
         vault.hashicorp.com/auth-path: {{ and .Values.vault .Values.vault.authPath | default .Values.global.vault.authPath | default "auth/kubernetes" | quote }}
         vault.hashicorp.com/agent-pre-populate-only: "false"
         {{- range $k, $v := $vaultSecrets }}
@@ -48,7 +48,7 @@ spec:
       {{- if $vaultEnabled }}
       serviceAccountName: {{ and .Values.vault .Values.vault.serviceAccountName | default .Values.global.vault.serviceAccountName | default (printf "%s-vault-sa" (include "universal-chart.fullname" .)) }}
       {{- end }}
-      automountServiceAccountToken: {{ .Values.security.automountServiceAccountToken | default $vaultEnabled }}
+      automountServiceAccountToken: {{ if $vaultEnabled }}true{{ else }}{{ .Values.security.automountServiceAccountToken | default false }}{{ end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000

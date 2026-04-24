@@ -6,9 +6,9 @@ global:
     imagePullSecrets: []
   vault:
     enabled: false
-    role: dev-role
+    role: am-backend-role
     authPath: auth/kubernetes
-    serviceAccountName: "" # Set to existing SA name (e.g. am-backend-sa) to skip SA creation
+    serviceAccountName: "am-backend-sa" # Standardized backend SA
     secrets: {}
 
 environment: default

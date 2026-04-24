@@ -148,6 +148,11 @@ jobs:
                 <username>\${env.GITHUB_ACTOR}</username>
                 <password>\${env.GITHUB_TOKEN}</password>
               </server>
+              <server>
+                <id>github-trade</id>
+                <username>\${env.GITHUB_ACTOR}</username>
+                <password>\${env.GITHUB_TOKEN}</password>
+              </server>
             </servers>
           </settings>
           EOF
@@ -158,7 +163,7 @@ jobs:
         run: |
           mvn -B clean deploy -DskipTests
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
           GITHUB_ACTOR: ${{ github.actor }}
 
       # ═══════════════════════════════════════════════════════════════════════

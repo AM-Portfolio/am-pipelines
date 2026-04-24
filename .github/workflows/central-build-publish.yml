@@ -30,11 +30,21 @@ on:
         type: string
         default: "am-apps-preprod"
         description: "Kubernetes namespace for preprod"
+      dev_namespace:
+        required: false
+        type: string
+        default: "am-apps-dev"
+        description: "Kubernetes namespace for development"
       prod_namespace:
         required: false
         type: string
         default: "am-apps-prod"
         description: "Kubernetes namespace for prod"
+      deploy_dev:
+        required: false
+        type: boolean
+        default: true
+        description: "Set to true to enable the dev deployment stage automatically"
       deploy_prod:
         required: false
         type: boolean
@@ -69,6 +79,7 @@ jobs:
   # ============================================================
   misconfig-scan:
     name: Security Scan (IaC)
+
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -113,20 +124,44 @@ jobs:
           java-version: "17"
           distribution: "temurin"
           cache: maven
-          server-id: github-investment
-          server-username: GITHUB_ACTOR
-          server-password: GITHUB_TOKEN
+
+      - name: Create Maven settings.xml
+        if: ${{ inputs.language == 'java' }}
+        run: |
+          mkdir -p ~/.m2
+          cat <<EOF > ~/.m2/settings.xml
+          <settings>
+            <servers>
+              <server>
+                <id>github</id>
+                <username>\${env.GITHUB_ACTOR}</username>
+                <password>\${env.GITHUB_TOKEN}</password>
+              </server>
+              <server>
+                <id>github-investment</id>
+                <username>\${env.GITHUB_ACTOR}</username>
+                <password>\${env.GITHUB_TOKEN}</password>
+              </server>
+              <server>
+                <id>github-trade</id>
+                <username>\${env.GITHUB_ACTOR}</username>
+                <password>\${env.GITHUB_TOKEN}</password>
+              </server>
+            </servers>
+          </settings>
+          EOF
 
       - name: Build Java Package
         if: ${{ inputs.language == 'java' }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
         run: mvn clean package -DskipTests
 
       - name: Run Java Tests
         if: ${{ inputs.language == 'java' }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
         run: mvn test || echo "Test step failed or skipped"
 
       # ── Python ────────────────────────────────────────────
@@ -160,10 +195,12 @@ jobs:
           # GHCR_TOKEN is an org-level PAT with read:packages scope, passed via
           # secrets: inherit. Enables cross-repo pulls (e.g. am-python-base from
           # am-market). Falls back to GITHUB_TOKEN for same-repo package access.
-          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Build and Push Docker Image
         if: ${{ inputs.image_name != '' }}
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           IMAGE_ID=${{ inputs.registry }}/${{ github.repository_owner }}/${{ inputs.image_name }}
           IMAGE_ID=$(echo $IMAGE_ID | tr '[A-Z]' '[a-z]')
@@ -173,6 +210,8 @@ jobs:
           echo "Building $IMAGE_ID ..."
           docker build -f Dockerfile \
             --build-arg BASE_REGISTRY=$BASE_REG \
+            --build-arg GITHUB_PACKAGES_USERNAME=${{ github.actor }} \
+            --build-arg GITHUB_PACKAGES_TOKEN=${GHCR_TOKEN} \
             -t $IMAGE_ID:${{ github.run_id }} \
             -t $IMAGE_ID:latest \
             ${{ inputs.build_context }}
@@ -203,12 +242,91 @@ jobs:
         uses: aquasecurity/trivy-action@master
         env:
           TRIVY_USERNAME: ${{ github.actor }}
-          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          TRIVY_PASSWORD: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
         with:
           image-ref: ${{ steps.image.outputs.ref }}
-          format: 'table'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '0' # Non-blocking (reports but continues)
+          format: "table"
+          severity: "CRITICAL,HIGH"
+          exit-code: "0" # Non-blocking (reports but continues)
+
+  # ============================================================
+  # DEPLOY — DEV
+  # Self-hosted runner | environment: dev
+  # Automatically triggers on every push
+  # ============================================================
+  deploy-dev:
+    name: Deploy → Dev
+    # needs: [build, vulnerability-scan, misconfig-scan, security-scan] # Disabled for now
+    runs-on: [self-hosted, linux, x64, docker]
+    if: false # ${{ inputs.image_name != '' && inputs.deploy_dev == true }} # Set to false to hide/disable
+    environment: dev-${{ inputs.image_name }} # Tracking only (no approval by default)
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate Helm Configuration
+        shell: bash
+        run: |
+          if [ ! -f "${{ inputs.working_directory }}/helm/values.yaml" ]; then
+            echo "❌ REQUIRED file missing: ${{ inputs.working_directory }}/helm/values.yaml"
+            echo "Deployment cannot proceed without a base values file."
+            exit 1
+          fi
+
+      - name: Checkout Universal Helm Chart
+        uses: actions/checkout@v4
+        with:
+          repository: AM-Portfolio/am-pipelines
+          path: am-pipelines-repo
+          ref: develop
+
+      - name: Deploy to Dev via Helm
+        shell: bash
+        run: |
+          BASE_VALUES="${{ inputs.working_directory }}/helm/values.yaml"
+          ENV_VALUES="${{ inputs.working_directory }}/helm/values.dev.yaml" # Optional dev overrides
+
+          VALUES_ARG=""
+          if [ -f "$BASE_VALUES" ]; then
+            VALUES_ARG="-f \"$BASE_VALUES\""
+          fi
+          if [ -f "$ENV_VALUES" ]; then
+            VALUES_ARG="$VALUES_ARG -f \"$ENV_VALUES\""
+          fi
+
+          echo "🚀 [DEV] Deploying ${{ inputs.image_name }} → ${{ inputs.dev_namespace }}"
+
+          REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+
+          CMD="helm upgrade --install ${{ inputs.image_name }} ./am-pipelines-repo/helm/universal-chart \
+            --namespace ${{ inputs.dev_namespace }} \
+            --create-namespace \
+            --set global.image.registry=\"${{ inputs.registry }}/$REPO_OWNER\" \
+            --set global.image.tag=\"${{ github.run_id }}\" \
+            --set global.image.pullPolicy=\"Always\" \
+            --set language=${{ inputs.language }} \
+            $VALUES_ARG"
+            
+          eval "$CMD"
+
+      - name: Verify Dev Rollout
+        shell: bash
+        run: |
+          ns="${{ inputs.dev_namespace }}"
+          dep="${{ inputs.image_name }}"
+          echo "⏳ Waiting for rollout: $dep in $ns ..."
+
+          if ! kubectl rollout status deployment/$dep -n $ns --timeout=10m; then
+            echo "❌ Rollout FAILED for $dep"
+            kubectl get pods -n $ns
+            kubectl get events -n $ns --sort-by='.lastTimestamp' | tail -n 20
+            exit 1
+          fi
+          echo "✅ $dep is healthy in dev"
 
   # ============================================================
   # DEPLOY — PREPROD
@@ -218,7 +336,7 @@ jobs:
   deploy-preprod:
     name: Deploy → Preprod
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
-    runs-on: self-hosted
+    runs-on: [self-hosted, linux, x64, docker]
     if: ${{ inputs.image_name != '' }}
     environment: preprod-${{ inputs.image_name }} # ⏸ Pauses for preprod approval
     permissions:
@@ -234,6 +352,7 @@ jobs:
         with:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
+          ref: develop
 
       - name: Deploy to Preprod via Helm
         shell: bash
@@ -294,9 +413,13 @@ jobs:
   # ============================================================
   deploy-prod:
     name: Deploy → Prod
-    needs: [deploy-preprod, vulnerability-scan, misconfig-scan, security-scan]
-    runs-on: self-hosted
-    if: ${{ inputs.image_name != '' && inputs.deploy_prod == true }}
+    needs: [deploy-preprod]
+    runs-on: [self-hosted, linux, x64, docker]
+    if: |
+      always() && 
+      needs.deploy-preprod.result == 'success' && 
+      inputs.image_name != '' && 
+      inputs.deploy_prod == true
     environment: prod-${{ inputs.image_name }} # ⏸ Pauses for prod approval
     permissions:
       contents: read
@@ -311,6 +434,7 @@ jobs:
         with:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
+          ref: develop
 
       - name: Deploy to Prod via Helm
         shell: bash

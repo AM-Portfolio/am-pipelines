@@ -35,11 +35,4 @@ resources:
     cpu: 100m
     memory: 256Mi
 
-# Standard Infrastructure Defaults (Overriden by Vault at runtime)
-env:
-  KAFKA_BOOTSTRAP_SERVERS: "kafka.infra.svc.cluster.local:9092"
-  KAFKA_SECURITY_PROTOCOL: "SASL_PLAINTEXT"
-  KAFKA_SASL_MECHANISM: "SCRAM-SHA-256"
-  MONGODB_CONNECTION_URL: "mongodb://mongodb.infra.svc.cluster.local:27017"
-  REDIS_HOSTNAME: "redis.infra.svc.cluster.local"
-  REDIS_PORT: "6379"
+env: {}

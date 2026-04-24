@@ -23,7 +23,7 @@ port: 8080
 
 # Security Defaults (Professional Standards)
 security:
-  automountServiceAccountToken: false
+  # automountServiceAccountToken: false # Now dynamically handled based on Vault status
   readOnlyRootFilesystem: false
 
 # Professional Resource Limits (Satisfies CKV_K8S_21/22/31)

@@ -34,7 +34,7 @@ spec:
           {{- end }}
           {{- else }}
           {{`{{- range $sk, $sv := .Data.data }}`}}
-          {{`export `}}{{`{{ $sk | upper }}`}}="{{`{{ $sv }}`}}"
+          {{`export `}}{{`{{ $sk | toUpper }}`}}="{{`{{ $sv }}`}}"
           {{`{{- end }}`}}
           {{- if eq $k "kafka" }}
           {{`export KAFKA_JAAS_CONFIG="org.apache.kafka.common.security.scram.ScramLoginModule required username=\"{{ .Data.data.username }}\" password=\"{{ .Data.data.password }}\";"`}}

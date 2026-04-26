@@ -309,11 +309,15 @@ jobs:
         shell: bash
         run: |
           BASE_VALUES="${{ inputs.working_directory }}/helm/values.yaml"
+          MAPPING_VALUES="${{ inputs.working_directory }}/helm/vault-mappings.yaml"
           ENV_VALUES="${{ inputs.working_directory }}/helm/values.dev.yaml" # Optional dev overrides
 
           VALUES_ARG=""
           if [ -f "$BASE_VALUES" ]; then
             VALUES_ARG="-f \"$BASE_VALUES\""
+          fi
+          if [ -f "$MAPPING_VALUES" ]; then
+            VALUES_ARG="$VALUES_ARG -f \"$MAPPING_VALUES\""
           fi
           if [ -f "$ENV_VALUES" ]; then
             VALUES_ARG="$VALUES_ARG -f \"$ENV_VALUES\""
@@ -379,11 +383,15 @@ jobs:
         shell: bash
         run: |
           BASE_VALUES="${{ inputs.working_directory }}/helm/values.yaml"
+          MAPPING_VALUES="${{ inputs.working_directory }}/helm/vault-mappings.yaml"
           ENV_VALUES="${{ inputs.working_directory }}/helm/values.preprod.yaml"
 
           VALUES_ARG=""
           if [ -f "$BASE_VALUES" ]; then
             VALUES_ARG="-f \"$BASE_VALUES\""
+          fi
+          if [ -f "$MAPPING_VALUES" ]; then
+            VALUES_ARG="$VALUES_ARG -f \"$MAPPING_VALUES\""
           fi
           if [ -f "$ENV_VALUES" ]; then
             VALUES_ARG="$VALUES_ARG -f \"$ENV_VALUES\""
@@ -461,11 +469,15 @@ jobs:
         shell: bash
         run: |
           BASE_VALUES="${{ inputs.working_directory }}/helm/values.yaml"
+          MAPPING_VALUES="${{ inputs.working_directory }}/helm/vault-mappings.yaml"
           ENV_VALUES="${{ inputs.working_directory }}/helm/values.prod.yaml"
 
           VALUES_ARG=""
           if [ -f "$BASE_VALUES" ]; then
             VALUES_ARG="-f \"$BASE_VALUES\""
+          fi
+          if [ -f "$MAPPING_VALUES" ]; then
+            VALUES_ARG="$VALUES_ARG -f \"$MAPPING_VALUES\""
           fi
           if [ -f "$ENV_VALUES" ]; then
             VALUES_ARG="$VALUES_ARG -f \"$ENV_VALUES\""

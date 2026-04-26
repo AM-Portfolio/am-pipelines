@@ -26,7 +26,15 @@ spec:
         vault.hashicorp.com/agent-inject-secret-{{ $k }}: {{ if kindIs "string" $v }}{{ $v | quote }}{{ else }}{{ $v.path | quote }}{{ end }}
         vault.hashicorp.com/agent-inject-template-{{ $k }}: |
           {{`{{- with secret `}} {{ if kindIs "string" $v }}{{ $v | quote }}{{ else }}{{ $v.path | quote }}{{ end }} {{` -}}` }}
-          {{- if and (not (kindIs "string" $v)) $v.template }}
+          {{- if and (not (kindIs "string" $v)) $v.mappings }}
+          {{- range $moduleVar, $vaultKey := $v.mappings }}
+          {{- if eq $vaultKey "__jaas__" }}
+          {{`export `}}{{ $moduleVar }}{{`="org.apache.kafka.common.security.scram.ScramLoginModule required username=\"{{ .Data.data.username }}\" password=\"{{ .Data.data.password }}\";"`}}
+          {{- else }}
+          {{`export `}}{{ $moduleVar }}="{{`{{`}} index .Data.data {{ $vaultKey | quote }} {{`}}`}}"
+          {{- end }}
+          {{- end }}
+          {{- else if and (not (kindIs "string" $v)) $v.template }}
           {{ $v.template | nindent 10 }}
           {{- else if and (not (kindIs "string" $v)) $v.keys }}
           {{- range $varName := $v.keys }}
@@ -36,9 +44,6 @@ spec:
           {{`{{- range $sk, $sv := .Data.data }}`}}
           {{`export `}}{{`{{ $sk | toUpper }}`}}="{{`{{ $sv }}`}}"
           {{`{{- end }}`}}
-          {{- if eq $k "kafka" }}
-          {{`export KAFKA_JAAS_CONFIG="org.apache.kafka.common.security.scram.ScramLoginModule required username=\"{{ .Data.data.username }}\" password=\"{{ .Data.data.password }}\";"`}}
-          {{- end }}
           {{- end }}
           {{`{{- end }}`}}
         {{- end }}

@@ -1,0 +1,38 @@
+name: Reusable PR Agent
+
+on:
+  workflow_call:
+    inputs:
+      model:
+        description: "The Gemini model to use"
+        required: false
+        type: string
+        default: "gemini-1.5-flash"
+    secrets:
+      GOOGLE_API_KEY:
+        required: true
+      GH_TOKEN:
+        required: false
+
+jobs:
+  pr_agent:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: write
+    steps:
+      - name: PR Agent action
+        uses: CodiumAI/pr-agent@main
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN || secrets.GHCR_TOKEN }}
+          CONFIG.MODEL_PROVIDER: "google"
+          CONFIG.MODEL: ${{ inputs.model }}
+          PR_DESCRIPTION.PUBLISH_DESCRIPTION_AS_COMMENT: "true"
+          PR_REVIEW.REQUIRE_SCORE_REVIEW: "false"
+          PR_HELP.ALLOW_MANUAL_COMMANDS: "true"
+          # Global Org-wide Defaults
+          PR_DESCRIPTION.AUTO_DESCRIPTION: "true"
+          PR_REVIEW.AUTO_REVIEW: "true"
+          PR_REVIEW.PUBLISH_LABELS: "true"

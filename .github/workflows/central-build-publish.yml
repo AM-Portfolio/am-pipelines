@@ -303,7 +303,7 @@ jobs:
         with:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
-          ref: develop
+          ref: main
 
       - name: Deploy to Dev via Helm
         shell: bash
@@ -377,7 +377,7 @@ jobs:
         with:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
-          ref: develop
+          ref: main
 
       - name: Deploy to Preprod via Helm
         shell: bash
@@ -463,7 +463,7 @@ jobs:
         with:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
-          ref: develop
+          ref: main
 
       - name: Deploy to Prod via Helm
         shell: bash

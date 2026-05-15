@@ -101,6 +101,19 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           {{- end }}
+          {{- if .Values.probes }}
+          {{- if .Values.probes.startup }}
+          # Startup probe added via AM-Pipelines Universal Chart v1.0.1
+          startupProbe:
+            httpGet:
+              path: {{ .Values.probes.startup.path | default "/health" }}
+              port: {{ .Values.probes.port | default .Values.port }}
+            initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds | default 0 }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds | default 10 }}
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds | default 5 }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold | default 18 }}
+          {{- end }}
+          {{- end }}
           livenessProbe:
             httpGet:
               path: {{ if and .Values.probes .Values.probes.liveness }}{{ .Values.probes.liveness.path | default "/health" }}{{ else }}"/health"{{ end }}

@@ -277,9 +277,9 @@ jobs:
   # ============================================================
   deploy-dev:
     name: Deploy → Dev
-    # needs: [build, vulnerability-scan, misconfig-scan, security-scan] # Disabled for now
+    needs: [build]
     runs-on: [self-hosted, linux, x64, docker]
-    if: false # ${{ inputs.image_name != '' && inputs.deploy_dev == true }} # Set to false to hide/disable
+    if: ${{ inputs.image_name != '' && inputs.deploy_dev == true }}
     environment: dev-${{ inputs.image_name }} # Tracking only (no approval by default)
     permissions:
       contents: read

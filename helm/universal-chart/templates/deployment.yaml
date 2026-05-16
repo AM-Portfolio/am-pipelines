@@ -135,3 +135,15 @@ spec:
             periodSeconds: {{ if and .Values.probes .Values.probes.readiness }}{{ .Values.probes.readiness.periodSeconds | default 10 }}{{ else }}10{{ end }}
             timeoutSeconds: {{ if and .Values.probes .Values.probes.readiness }}{{ .Values.probes.readiness.timeoutSeconds | default 5 }}{{ else }}5{{ end }}
             failureThreshold: {{ if and .Values.probes .Values.probes.readiness }}{{ .Values.probes.readiness.failureThreshold | default 3 }}{{ else }}3{{ end }}
+          {{- if and .Values.configMap .Values.configMap.enabled }}
+          volumeMounts:
+            - name: config-volume
+              mountPath: {{ .Values.configMap.mountPath }}
+              subPath: {{ .Values.configMap.subPath | default "" }}
+          {{- end }}
+      {{- if and .Values.configMap .Values.configMap.enabled }}
+      volumes:
+        - name: config-volume
+          configMap:
+            name: {{ include "universal-chart.fullname" . }}-config
+      {{- end }}

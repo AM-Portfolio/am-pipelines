@@ -19,6 +19,7 @@ spec:
         {{- if $vaultEnabled }}
         # Vault Agent Sidecar Injector
         vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/agent-init-first: "true"
         vault.hashicorp.com/role: {{ and .Values.vault .Values.vault.role | default .Values.global.vault.role | default (printf "am-%s-role" (include "universal-chart.fullname" .)) | quote }}
         vault.hashicorp.com/auth-path: {{ and .Values.vault .Values.vault.authPath | default .Values.global.vault.authPath | default "auth/kubernetes" | quote }}
         vault.hashicorp.com/agent-pre-populate-only: "false"

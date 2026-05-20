@@ -1,14 +1,13 @@
 name: Publish Library
-# ─────────────────────────────────────────────────────────────────────────────
-# REUSABLE WORKFLOW — called by any repository's workflow.
+# Reusable workflow — called by repo workflows on push/merge to main (and PRs where configured).
 #
-# Supports:
-#   language: python  → Builds .whl/.tar.gz, publishes to GitHub Release
-#   language: java    → Runs mvn deploy to GitHub Packages Maven registry
-#   language: flutter → Analyzes, tests, zips source, publishes to GitHub Release
+# Inputs:
+#   action: publish (deploy/release) | verify (build/test only, no registry push)
+#   use_release_version: request -SNAPSHOT strip (honored only on refs/heads/main)
 #
-# Each repo customises via `with:` inputs. Common logic lives here.
-# ─────────────────────────────────────────────────────────────────────────────
+# java   → mvn deploy → GitHub Packages (github / github-core / github-investment ids)
+# python → wheel/sdist → GitHub Release
+# flutter → analyze/test → zip → GitHub Release (skipped when pubspec has publish_to: none)
 
 on:
   workflow_call:
@@ -18,14 +17,24 @@ on:
         required: true
         type: string
       working_directory:
-        description: 'Path to the SDK directory (relative to repo root)'
+        description: 'Path to the SDK/library directory (relative to repo root)'
         required: true
         type: string
       sdk_name:
-        description: 'Canonical SDK name used for the release tag (e.g. flutter-market-sdk)'
+        description: 'Canonical name for release tags (e.g. am-common-lib)'
         required: false
         type: string
         default: ''
+      action:
+        description: 'publish (deploy/release) or verify (build/test only)'
+        required: false
+        type: string
+        default: 'publish'
+      use_release_version:
+        description: 'Request -SNAPSHOT strip before Java publish (applied only on refs/heads/main)'
+        required: false
+        type: boolean
+        default: false
       maven_repo_id:
         description: 'Maven server id in pom.xml distributionManagement (java only)'
         required: false
@@ -42,14 +51,13 @@ jobs:
     name: Build & Publish — ${{ inputs.sdk_name || inputs.working_directory }}
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # create GitHub Releases, push tags
-      packages: write   # push to GitHub Packages Maven registry
+      contents: write
+      packages: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ── Resolve SDK name ──────────────────────────────────────────────────
       - name: Resolve SDK name
         id: meta
         run: |
@@ -59,11 +67,7 @@ jobs:
           fi
           echo "sdk_name=$SDK_NAME" >> $GITHUB_OUTPUT
 
-      # ═══════════════════════════════════════════════════════════════════════
-      # PYTHON → GitHub Release (.whl + .tar.gz)
-      # GitHub Packages does NOT support a pip registry.
-      # Install: pip install <release-download-url>/<package>.whl
-      # ═══════════════════════════════════════════════════════════════════════
+      # ── Python ──────────────────────────────────────────────────────────
       - name: Set up Python
         if: inputs.language == 'python'
         uses: actions/setup-python@v5
@@ -77,52 +81,42 @@ jobs:
           python -m pip install --upgrade build
           python -m build
 
-      - name: Read Python version from pyproject.toml
-        if: inputs.language == 'python'
+      - name: Verify Python package
+        if: inputs.language == 'python' && inputs.action == 'verify'
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          pip install pytest
+          if [ -d "test" ] || [ -d "tests" ]; then pytest; else echo "No tests directory — skipping pytest."; fi
+
+      - name: Read Python version
+        if: inputs.language == 'python' && inputs.action == 'publish'
         id: py_version
         working-directory: ${{ inputs.working_directory }}
         run: |
-          # Use grep+sed — works on any Python version, no imports needed
           VERSION=$(grep '^version' pyproject.toml | head -1 | sed 's/.*=\s*["\x27]\(.*\)["\x27].*/\1/' | xargs)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Detected version: $VERSION"
 
       - name: Publish Python SDK to GitHub Release
-        if: inputs.language == 'python'
+        if: inputs.language == 'python' && inputs.action == 'publish'
         working-directory: ${{ inputs.working_directory }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           SDK="${{ steps.meta.outputs.sdk_name }}"
           VER="${{ steps.py_version.outputs.version }}"
           TAG="${SDK}-v${VER}"
           WHL=$(ls dist/*.whl | xargs basename)
-
-          cat <<EOF > /tmp/release-notes.md
+          cat > /tmp/release-notes.md <<EOF
           ## ${SDK} v${VER}
-
           ### Install
           \`\`\`bash
           pip install https://github.com/${{ github.repository }}/releases/download/${TAG}/${WHL}
           \`\`\`
-
-          ### Install from git
-          \`\`\`bash
-          pip install "git+https://github.com/${{ github.repository }}.git@${{ github.sha }}#subdirectory=${{ inputs.working_directory }}"
-          \`\`\`
           EOF
+          gh release create "$TAG" dist/* --title "${SDK} v${VER}" --notes-file /tmp/release-notes.md --repo "${{ github.repository }}" \
+            2>/dev/null || gh release upload "$TAG" dist/* --clobber --repo "${{ github.repository }}"
 
-          gh release create "$TAG" dist/* \
-            --title "${SDK} v${VER}" \
-            --notes-file /tmp/release-notes.md \
-            --repo "${{ github.repository }}" \
-            2>/dev/null || \
-          gh release upload "$TAG" dist/* --clobber \
-            --repo "${{ github.repository }}"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # ═══════════════════════════════════════════════════════════════════════
-      # JAVA → GitHub Packages Maven Registry
-      # ═══════════════════════════════════════════════════════════════════════
+      # ── Java ────────────────────────────────────────────────────────────
       - name: Set up JDK 17
         if: inputs.language == 'java'
         uses: actions/setup-java@v4
@@ -135,116 +129,118 @@ jobs:
         if: inputs.language == 'java'
         run: |
           mkdir -p ~/.m2
-          cat <<EOF > ~/.m2/settings.xml
-          <settings>
+          cat > ~/.m2/settings.xml <<'EOF'
+          <settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                    xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0
+                                        http://maven.apache.org/xsd/settings-1.0.0.xsd">
             <servers>
               <server>
                 <id>github</id>
-                <username>\${env.GITHUB_ACTOR}</username>
-                <password>\${env.GITHUB_TOKEN}</password>
+                <username>${env.GITHUB_ACTOR}</username>
+                <password>${env.GITHUB_TOKEN}</password>
               </server>
               <server>
                 <id>github-investment</id>
-                <username>\${env.GITHUB_ACTOR}</username>
-                <password>\${env.GITHUB_TOKEN}</password>
+                <username>${env.GITHUB_ACTOR}</username>
+                <password>${env.GITHUB_TOKEN}</password>
               </server>
               <server>
                 <id>github-trade</id>
-                <username>\${env.GITHUB_ACTOR}</username>
-                <password>\${env.GITHUB_TOKEN}</password>
+                <username>${env.GITHUB_ACTOR}</username>
+                <password>${env.GITHUB_TOKEN}</password>
               </server>
               <server>
                 <id>github-core</id>
-                <username>\${env.GITHUB_ACTOR}</username>
-                <password>\${env.GITHUB_TOKEN}</password>
+                <username>${env.GITHUB_ACTOR}</username>
+                <password>${env.GITHUB_TOKEN}</password>
               </server>
             </servers>
           </settings>
           EOF
 
-      - name: Build and Deploy Java SDK to GitHub Packages
-        if: inputs.language == 'java'
+      - name: Promote to release version (strip SNAPSHOT, CI only)
+        if: >-
+          inputs.language == 'java'
+          && inputs.action == 'publish'
+          && inputs.use_release_version
+          && github.ref == 'refs/heads/main'
         working-directory: ${{ inputs.working_directory }}
         run: |
-          mvn -B clean deploy -DskipTests
+          CURRENT=$(mvn -q -DforceStdout help:evaluate -Dexpression=project.version)
+          echo "Current version: $CURRENT"
+          if echo "$CURRENT" | grep -q 'SNAPSHOT'; then
+            mvn -B org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
+              -DremoveSnapshot -DgenerateBackupPoms=false
+          else
+            echo "Already a release version — no change."
+          fi
+
+      - name: Verify Java library
+        if: inputs.language == 'java' && inputs.action == 'verify'
+        working-directory: ${{ inputs.working_directory }}
+        run: mvn -B clean verify -DskipTests
+
+      - name: Build and Deploy Java library to GitHub Packages
+        if: inputs.language == 'java' && inputs.action == 'publish'
+        working-directory: ${{ inputs.working_directory }}
         env:
           GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
           GITHUB_ACTOR: ${{ github.actor }}
+        run: mvn -B clean deploy -DskipTests
 
-      # ═══════════════════════════════════════════════════════════════════════
-      # FLUTTER → GitHub Release (.zip of source)
-      # Pub.dev publishing is not supported for private packages.
-      # Teams install via: flutter pub add <package-name> --git-url=...
-      # ═══════════════════════════════════════════════════════════════════════
+      # ── Flutter ─────────────────────────────────────────────────────────
       - name: Set up Flutter
         if: inputs.language == 'flutter'
         uses: subosito/flutter-action@v2
         with:
-          channel: 'stable'
+          channel: stable
 
-      - name: Verify Flutter SDK (analyze + test)
+      - name: Skip non-publishable Flutter package
+        if: inputs.language == 'flutter'
+        id: flutter_publishable
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          if grep -qE '^publish_to:\s*["\x27]?none' pubspec.yaml 2>/dev/null; then
+            echo "publishable=false" >> $GITHUB_OUTPUT
+            echo "publish_to: none — verify only."
+          else
+            echo "publishable=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Verify Flutter SDK
         if: inputs.language == 'flutter'
         working-directory: ${{ inputs.working_directory }}
         run: |
           flutter pub get
           flutter analyze
-          if [ -d "test" ]; then
-            flutter test
-          else
-            echo "No test/ directory found — skipping flutter test."
-          fi
+          if [ -d test ]; then flutter test; else echo "No test/ directory — skipping flutter test."; fi
 
-      - name: Read Flutter version from pubspec.yaml
-        if: inputs.language == 'flutter'
+      - name: Read Flutter version
+        if: inputs.language == 'flutter' && inputs.action == 'publish' && steps.flutter_publishable.outputs.publishable == 'true'
         id: flutter_version
         working-directory: ${{ inputs.working_directory }}
         run: |
-          # Strip surrounding quotes and build-number suffix
-          VERSION=$(grep '^version:' pubspec.yaml | sed "s/version://;s/[\"' ]//g;s/+.*//" | xargs)
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version://;s/["'"'"' ]//g;s/+.*//' | xargs)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Detected version: $VERSION"
 
       - name: Zip Flutter SDK source
-        if: inputs.language == 'flutter'
+        if: inputs.language == 'flutter' && inputs.action == 'publish' && steps.flutter_publishable.outputs.publishable == 'true'
         working-directory: ${{ inputs.working_directory }}
         run: |
           SDK="${{ steps.meta.outputs.sdk_name }}"
           VER="${{ steps.flutter_version.outputs.version }}"
           mkdir -p dist
-          zip -r "dist/${SDK}-${VER}.zip" . \
-            --exclude "dist/*" ".git/*" ".dart_tool/*" "build/*"
+          zip -r "dist/${SDK}-${VER}.zip" . --exclude "dist/*" ".git/*" ".dart_tool/*" "build/*"
 
       - name: Publish Flutter SDK to GitHub Release
-        if: inputs.language == 'flutter'
+        if: inputs.language == 'flutter' && inputs.action == 'publish' && steps.flutter_publishable.outputs.publishable == 'true'
         working-directory: ${{ inputs.working_directory }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           SDK="${{ steps.meta.outputs.sdk_name }}"
           VER="${{ steps.flutter_version.outputs.version }}"
           TAG="${SDK}-v${VER}"
-
-          cat <<EOF > /tmp/release-notes.md
-          ## ${SDK} v${VER}
-
-          ### Add to pubspec.yaml
-          \`\`\`yaml
-          dependencies:
-            ${SDK}:
-              git:
-                url: https://github.com/${{ github.repository }}.git
-                path: ${{ inputs.working_directory }}
-                ref: ${TAG}
-          \`\`\`
-
-          ### Or install the zip directly
-          Download \`${SDK}-${VER}.zip\` from the assets below.
-          EOF
-
-          gh release create "$TAG" dist/*.zip \
-            --title "${SDK} v${VER}" \
-            --notes-file /tmp/release-notes.md \
-            --repo "${{ github.repository }}" \
-            2>/dev/null || \
-          gh release upload "$TAG" dist/*.zip --clobber \
-            --repo "${{ github.repository }}"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          gh release create "$TAG" dist/*.zip --title "${SDK} v${VER}" --repo "${{ github.repository }}" \
+            2>/dev/null || gh release upload "$TAG" dist/*.zip --clobber --repo "${{ github.repository }}"

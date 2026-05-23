@@ -42,12 +42,15 @@ jobs:
     steps:
       - name: Checkout Application Repo
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Checkout Universal Helm Chart (am-pipelines)
         uses: actions/checkout@v4
         with:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
+          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Deploy via Helm
         shell: bash

@@ -310,7 +310,7 @@ jobs:
         with:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
-          ref: main
+          ref: develop
           token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Deploy to Dev via Helm
@@ -387,7 +387,7 @@ jobs:
         with:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
-          ref: main
+          ref: develop
           token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Deploy to Preprod via Helm
@@ -476,7 +476,7 @@ jobs:
         with:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
-          ref: main
+          ref: develop
           token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Deploy to Prod via Helm

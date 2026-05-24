@@ -50,6 +50,7 @@ jobs:
         with:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
+          ref: develop
           token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Deploy via Helm

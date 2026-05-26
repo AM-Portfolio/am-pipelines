@@ -86,7 +86,7 @@ spec:
               . /vault/secrets/{{ $k }} 2>/dev/null || true
               {{- end }}
               {{- if eq .Values.language "java" }}
-              exec java -jar app.jar
+              exec java ${JAVA_OPTS:--Xmx512m} -jar app.jar
               {{- else if eq .Values.language "flutter" }}
               exec nginx -g "daemon off;"
               {{- else }}
@@ -96,6 +96,8 @@ spec:
           env:
             - name: ENVIRONMENT
               value: {{ .Values.environment | quote }}
+            {{- include "universal-chart.batchSearchEnv" . | nindent 12 }}
+            {{- include "universal-chart.schedulerEnv" . | nindent 12 }}
             {{- if .Values.env }}
             {{- range $k, $v := .Values.env }}
             - name: {{ $k | quote }}

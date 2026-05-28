@@ -312,6 +312,7 @@ jobs:
           path: am-pipelines-repo
           ref: develop
           token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          clean: true
 
       - name: Deploy to Dev via Helm
         shell: bash
@@ -389,6 +390,7 @@ jobs:
           path: am-pipelines-repo
           ref: develop
           token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          clean: true
 
       - name: Deploy to Preprod via Helm
         shell: bash
@@ -478,6 +480,7 @@ jobs:
           path: am-pipelines-repo
           ref: develop
           token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          clean: true
 
       - name: Deploy to Prod via Helm
         shell: bash

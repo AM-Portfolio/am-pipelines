@@ -34,7 +34,7 @@ spec:
           {{- else }}
           {{`{{- if or (index .Data.data `}}{{ $vaultKey | quote }}{{`) (eq (index .Data.data `}}{{ $vaultKey | quote }}{{`) false) -}}` }}
           {{`export `}}{{ $moduleVar }}="{{`{{`}} index .Data.data {{ $vaultKey | quote }} {{`}}`}}"
-          {{`{{- end -}}` }}
+          {{`{{ end }}` }}
           {{- end }}
           {{- end }}
           {{- else if and (not (kindIs "string" $v)) $v.template }}
@@ -43,7 +43,7 @@ spec:
           {{- range $varName := $v.keys }}
           {{`{{- if or (index .Data.data `}}{{ $varName | quote }}{{`) (eq (index .Data.data `}}{{ $varName | quote }}{{`) false) -}}` }}
           export {{ $varName }}="{{`{{`}} index .Data.data {{ $varName | quote }} {{`}}`}}"
-          {{`{{- end -}}` }}
+          {{`{{ end }}` }}
           {{- end }}
           {{- else }}
           {{`{{- range $sk, $sv := .Data.data }}`}}

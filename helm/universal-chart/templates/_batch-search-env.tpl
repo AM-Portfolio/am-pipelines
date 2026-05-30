@@ -3,7 +3,8 @@
   Controls Redis cache for POST /v1/securities/batch-search.
 */}}
 {{- define "universal-chart.batchSearchEnv" -}}
-{{- with .Values.config.batchSearch }}
+{{- with .Values.config }}
+{{- with .batchSearch }}
 - name: BATCH_SEARCH_CACHE_ENABLED
   value: {{ .cacheEnabled | default true | quote }}
 {{- with .maxQueries }}
@@ -21,6 +22,7 @@
 {{- with .maxCandidatesPerQuery }}
 - name: BATCH_SEARCH_MAX_CANDIDATES
   value: {{ . | quote }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- end }}

@@ -7,7 +7,8 @@
   without a code change.
 */}}
 {{- define "universal-chart.schedulerEnv" -}}
-{{- with .Values.config.scheduler }}
+{{- with .Values.config }}
+{{- with .scheduler }}
 
 {{/* ── Timezone ── */}}
 {{- with .timezone }}
@@ -79,6 +80,18 @@
 - name: SCHEDULER_INGESTION_FORCE
   value: {{ .force | quote }}
 {{- end }}
+{{- if hasKey . "useWebsocket" }}
+- name: SCHEDULER_INGESTION_USE_WEBSOCKET
+  value: {{ .useWebsocket | quote }}
+{{- end }}
+{{- if hasKey . "pollEnabled" }}
+- name: SCHEDULER_INGESTION_POLL_ENABLED
+  value: {{ .pollEnabled | quote }}
+{{- end }}
+{{- if hasKey . "pollHistorical" }}
+- name: SCHEDULER_INGESTION_POLL_HISTORICAL
+  value: {{ .pollHistorical | quote }}
+{{- end }}
 {{- with .symbols }}
 - name: SCHEDULER_INGESTION_SYMBOLS
   value: {{ . | quote }}
@@ -145,10 +158,10 @@
 {{- end }}
 {{- end }}
 
-{{- end }}{{/* end with .Values.config.scheduler */}}
+{{- end }}{{/* end with .scheduler */}}
 
 {{/* ── Redis cache TTLs & cleanup tuning ── */}}
-{{- with .Values.config.redis }}
+{{- with .redis }}
 {{- with .cleanupRetentionDays }}
 - name: REDIS_CLEANUP_RETENTION_DAYS
   value: {{ . | quote }}
@@ -179,6 +192,7 @@
   value: {{ . | quote }}
 {{- end }}
 {{- end }}
-{{- end }}{{/* end with .Values.config.redis */}}
+{{- end }}{{/* end with .redis */}}
 
+{{- end }}{{/* end with .Values.config */}}
 {{- end }}{{/* end define */}}

@@ -310,7 +310,7 @@ jobs:
         with:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
-          ref: develop
+          ref: main
           token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
           clean: true
 
@@ -388,7 +388,7 @@ jobs:
         with:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
-          ref: develop
+          ref: main
           token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
           clean: true
 
@@ -478,7 +478,7 @@ jobs:
         with:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
-          ref: develop
+          ref: main
           token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
           clean: true
 

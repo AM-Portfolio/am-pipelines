@@ -235,7 +235,26 @@ jobs:
           if ! git diff --quiet; then
             git add -u
             git commit -m "chore: bump version to next snapshot version [skip ci]"
-            git push origin HEAD:${{ github.ref }}
+            
+            BRANCH_NAME=$(echo "${{ github.ref }}" | sed 's|refs/heads/||')
+            MAX_RETRIES=5
+            for i in $(seq 1 $MAX_RETRIES); do
+              echo "Push attempt $i..."
+              git fetch origin
+              if git pull --rebase --autostash origin $BRANCH_NAME; then
+                if git push origin HEAD:${{ github.ref }}; then
+                  echo "Push succeeded!"
+                  exit 0
+                fi
+              else
+                echo "Rebase conflicted. Aborting and retrying..."
+                git rebase --abort
+              fi
+              echo "Waiting 5 seconds before retry..."
+              sleep 5
+            done
+            echo "Failed to push version bump after $MAX_RETRIES attempts."
+            exit 1
           else
             echo "No version changes detected."
           fi

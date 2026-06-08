@@ -170,8 +170,15 @@ jobs:
           CURRENT=$(mvn -q -DforceStdout help:evaluate -Dexpression=project.version)
           echo "Current version: $CURRENT"
           if echo "$CURRENT" | grep -q 'SNAPSHOT'; then
-            mvn -B org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
-              -DremoveSnapshot -DgenerateBackupPoms=false
+            if [ -f "${{ github.workspace }}/pom.xml" ] && [ "${{ inputs.working_directory }}" != "." ] && [ "${{ inputs.working_directory }}" != "./" ]; then
+              echo "Workspace-level root pom.xml found. Promoting parent and submodules at root."
+              mvn -B -f "${{ github.workspace }}/pom.xml" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
+                -DremoveSnapshot -DgenerateBackupPoms=false
+            else
+              echo "Promoting version locally in working directory."
+              mvn -B org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
+                -DremoveSnapshot -DgenerateBackupPoms=false
+            fi
           else
             echo "Already a release version — no change."
           fi

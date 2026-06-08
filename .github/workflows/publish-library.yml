@@ -194,7 +194,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
           GITHUB_ACTOR: ${{ github.actor }}
-        run: mvn -B clean deploy -DskipTests
+        run: |
+          mvn -B clean deploy -DskipTests > deploy.log 2>&1 || {
+            status=$?
+            cat deploy.log
+            if grep -q "status code: 409" deploy.log || grep -q "Conflict (409)" deploy.log; then
+              echo "WARNING: Library version already deployed (409 Conflict). Skipping deploy."
+              exit 0
+            else
+              exit $status
+            fi
+          }
+          cat deploy.log
 
       # ── Flutter ─────────────────────────────────────────────────────────
       - name: Set up Flutter

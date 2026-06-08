@@ -35,6 +35,11 @@ on:
         required: false
         type: boolean
         default: false
+      advance_snapshot:
+        description: 'Whether to auto-advance Java version to next snapshot and push to branch (main/master only)'
+        required: false
+        type: boolean
+        default: false
       maven_repo_id:
         description: 'Maven server id in pom.xml distributionManagement (java only)'
         required: false
@@ -206,6 +211,34 @@ jobs:
             fi
           }
           cat deploy.log
+
+      - name: Advance library to next snapshot and push
+        if: >-
+          inputs.language == 'java'
+          && inputs.action == 'publish'
+          && inputs.use_release_version
+          && inputs.advance_snapshot
+          && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          if [ -f "${{ github.workspace }}/pom.xml" ] && [ "${{ inputs.working_directory }}" != "." ] && [ "${{ inputs.working_directory }}" != "./" ]; then
+            echo "Workspace-level root pom.xml found. Advancing parent and submodules at root."
+            mvn -B -f "${{ github.workspace }}/pom.xml" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
+              -DnextSnapshot=true -DgenerateBackupPoms=false
+          else
+            echo "Advancing version locally in working directory."
+            mvn -B org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
+              -DnextSnapshot=true -DgenerateBackupPoms=false
+          fi
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet; then
+            git add -u
+            git commit -m "chore: bump version to next snapshot version [skip ci]"
+            git push origin HEAD:${{ github.ref }}
+          else
+            echo "No version changes detected."
+          fi
 
       # ── Flutter ─────────────────────────────────────────────────────────
       - name: Set up Flutter

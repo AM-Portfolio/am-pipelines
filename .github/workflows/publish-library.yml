@@ -193,6 +193,9 @@ jobs:
       - name: Verify Java library
         if: inputs.language == 'java' && inputs.action == 'verify'
         working-directory: ${{ inputs.working_directory }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
         run: mvn -B clean verify -DskipTests
 
       - name: Build and Deploy Java library to GitHub Packages

@@ -167,6 +167,7 @@ jobs:
         if: ${{ inputs.language == 'java' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
         run: mvn test || echo "Test step failed or skipped"
 
       # ── Python ────────────────────────────────────────────

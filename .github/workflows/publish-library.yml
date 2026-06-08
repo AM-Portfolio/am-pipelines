@@ -3,7 +3,7 @@ name: Publish Library
 #
 # Inputs:
 #   action: publish (deploy/release) | verify (build/test only, no registry push)
-#   use_release_version: request -SNAPSHOT strip (honored only on refs/heads/main)
+#   use_release_version: request -SNAPSHOT strip (honored only on refs/heads/main or refs/heads/master)
 #
 # java   → mvn deploy → GitHub Packages (github / github-core / github-investment ids)
 # python → wheel/sdist → GitHub Release
@@ -31,7 +31,7 @@ on:
         type: string
         default: 'publish'
       use_release_version:
-        description: 'Request -SNAPSHOT strip before Java publish (applied only on refs/heads/main)'
+        description: 'Request -SNAPSHOT strip before Java publish (applied only on refs/heads/main or refs/heads/master)'
         required: false
         type: boolean
         default: false
@@ -164,7 +164,7 @@ jobs:
           inputs.language == 'java'
           && inputs.action == 'publish'
           && inputs.use_release_version
-          && github.ref == 'refs/heads/main'
+          && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
         working-directory: ${{ inputs.working_directory }}
         run: |
           CURRENT=$(mvn -q -DforceStdout help:evaluate -Dexpression=project.version)

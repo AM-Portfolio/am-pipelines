@@ -174,20 +174,27 @@ jobs:
           && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
         working-directory: ${{ inputs.working_directory }}
         run: |
-          CURRENT=$(mvn -q -DforceStdout help:evaluate -Dexpression=project.version)
-          echo "Current version: $CURRENT"
-          if echo "$CURRENT" | grep -q 'SNAPSHOT'; then
-            if [ -f "${{ github.workspace }}/pom.xml" ] && [ "${{ inputs.working_directory }}" != "." ] && [ "${{ inputs.working_directory }}" != "./" ]; then
-              echo "Workspace-level root pom.xml found. Promoting parent and submodules at root."
-              mvn -B -f "${{ github.workspace }}/pom.xml" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
+          ROOT_POM="${{ github.workspace }}/pom.xml"
+          if [ -f "$ROOT_POM" ] && [ "${{ inputs.working_directory }}" != "." ] && [ "${{ inputs.working_directory }}" != "./" ]; then
+            echo "Workspace-level root pom.xml found. Evaluating and promoting from reactor root."
+            CURRENT=$(mvn -N -q -f "$ROOT_POM" -DforceStdout help:evaluate -Dexpression=project.version)
+            echo "Current version: $CURRENT"
+            if echo "$CURRENT" | grep -q 'SNAPSHOT'; then
+              mvn -B -f "$ROOT_POM" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
                 -DremoveSnapshot -DgenerateBackupPoms=false
             else
+              echo "Already a release version — no change."
+            fi
+          else
+            CURRENT=$(mvn -N -q -DforceStdout help:evaluate -Dexpression=project.version)
+            echo "Current version: $CURRENT"
+            if echo "$CURRENT" | grep -q 'SNAPSHOT'; then
               echo "Promoting version locally in working directory."
               mvn -B org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
                 -DremoveSnapshot -DgenerateBackupPoms=false
+            else
+              echo "Already a release version — no change."
             fi
-          else
-            echo "Already a release version — no change."
           fi
 
       - name: Verify Java library

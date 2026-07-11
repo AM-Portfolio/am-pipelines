@@ -179,10 +179,12 @@ jobs:
           && inputs.action == 'publish'
           && inputs.use_release_version
           && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
-        working-directory: ${{ inputs.working_directory }}
         run: |
           ROOT_POM="${{ github.workspace }}/pom.xml"
-          if [ -f "$ROOT_POM" ] && [ "${{ inputs.working_directory }}" != "." ] && [ "${{ inputs.working_directory }}" != "./" ]; then
+          MODULE_DIR="${{ inputs.working_directory }}"
+          MODULE_POM="${{ github.workspace }}/${MODULE_DIR}/pom.xml"
+
+          if [ -f "$ROOT_POM" ] && [ "$MODULE_DIR" != "." ] && [ "$MODULE_DIR" != "./" ]; then
             echo "Workspace-level root pom.xml found. Evaluating and promoting from reactor root."
             CURRENT=$(mvn -N -q -f "$ROOT_POM" -DforceStdout help:evaluate -Dexpression=project.version)
             echo "Current version: $CURRENT"
@@ -192,12 +194,26 @@ jobs:
             else
               echo "Already a release version — no change."
             fi
+
+            RELEASE=$(mvn -N -q -f "$ROOT_POM" -DforceStdout help:evaluate -Dexpression=project.version)
+            echo "Release version: $RELEASE"
+
+            # Keep the target module aligned with the promoted root (covers modules outside the reactor).
+            perl -i -0pe "s/(<artifactId>am-core-services<\\/artifactId>\\s*<version>)[^<]+(<\\/version>)/\${1}${RELEASE}\${2}/" "$MODULE_POM"
+
+            if grep -Fq "<module>${MODULE_DIR}</module>" "$ROOT_POM"; then
+              mvn -B -f "$ROOT_POM" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
+                -pl "$MODULE_DIR" -DnewVersion="$RELEASE" -DgenerateBackupPoms=false
+            else
+              mvn -B -f "$MODULE_POM" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
+                -DnewVersion="$RELEASE" -DgenerateBackupPoms=false
+            fi
           else
-            CURRENT=$(mvn -N -q -DforceStdout help:evaluate -Dexpression=project.version)
+            CURRENT=$(mvn -N -q -f "$MODULE_POM" -DforceStdout help:evaluate -Dexpression=project.version)
             echo "Current version: $CURRENT"
             if echo "$CURRENT" | grep -q 'SNAPSHOT'; then
               echo "Promoting version locally in working directory."
-              mvn -B org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
+              mvn -B -f "$MODULE_POM" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
                 -DremoveSnapshot -DgenerateBackupPoms=false
             else
               echo "Already a release version — no change."
@@ -206,20 +222,34 @@ jobs:
 
       - name: Verify Java library
         if: inputs.language == 'java' && inputs.action == 'verify'
-        working-directory: ${{ inputs.working_directory }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
-          GITHUB_ACTOR: ${{ github.actor }}
-        run: mvn -B clean verify -DskipTests
-
-      - name: Build and Deploy Java library to GitHub Packages
-        if: inputs.language == 'java' && inputs.action == 'publish'
-        working-directory: ${{ inputs.working_directory }}
         env:
           GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
           GITHUB_ACTOR: ${{ github.actor }}
         run: |
-          mvn -B clean deploy -DskipTests > deploy.log 2>&1 || {
+          ROOT_POM="${{ github.workspace }}/pom.xml"
+          MODULE_DIR="${{ inputs.working_directory }}"
+          MODULE_POM="${{ github.workspace }}/${MODULE_DIR}/pom.xml"
+          if [ -f "$ROOT_POM" ] && [ "$MODULE_DIR" != "." ] && [ "$MODULE_DIR" != "./" ] && grep -Fq "<module>${MODULE_DIR}</module>" "$ROOT_POM"; then
+            mvn -B -f "$ROOT_POM" clean verify -pl "$MODULE_DIR" -DskipTests
+          else
+            mvn -B -f "$MODULE_POM" clean verify -DskipTests
+          fi
+
+      - name: Build and Deploy Java library to GitHub Packages
+        if: inputs.language == 'java' && inputs.action == 'publish'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: |
+          ROOT_POM="${{ github.workspace }}/pom.xml"
+          MODULE_DIR="${{ inputs.working_directory }}"
+          MODULE_POM="${{ github.workspace }}/${MODULE_DIR}/pom.xml"
+          if [ -f "$ROOT_POM" ] && [ "$MODULE_DIR" != "." ] && [ "$MODULE_DIR" != "./" ] && grep -Fq "<module>${MODULE_DIR}</module>" "$ROOT_POM"; then
+            MVN_DEPLOY=(mvn -B -f "$ROOT_POM" clean deploy -pl "$MODULE_DIR" -DskipTests)
+          else
+            MVN_DEPLOY=(mvn -B -f "$MODULE_POM" clean deploy -DskipTests)
+          fi
+          "${MVN_DEPLOY[@]}" > deploy.log 2>&1 || {
             status=$?
             cat deploy.log
             if grep -q "status code: 409" deploy.log || grep -q "Conflict (409)" deploy.log; then

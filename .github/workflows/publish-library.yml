@@ -50,6 +50,11 @@ on:
         required: false
         type: string
         default: ''
+      git_ref:
+        description: 'Optional git ref to checkout (e.g. pre-bump SHA for SDK publish after Core Libraries)'
+        required: false
+        type: string
+        default: ''
 
 jobs:
   publish:
@@ -63,6 +68,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.git_ref || github.sha }}
+          fetch-depth: 0
           token: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Resolve SDK name

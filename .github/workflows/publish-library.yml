@@ -3,7 +3,7 @@ name: Publish Library
 #
 # Inputs:
 #   action: publish (deploy/release) | verify (build/test only, no registry push)
-#   use_release_version: request -SNAPSHOT strip (honored only on refs/heads/main)
+#   use_release_version: request -SNAPSHOT strip (honored only on refs/heads/main or refs/heads/master)
 #
 # java   → mvn deploy → GitHub Packages (github / github-core / github-investment ids)
 # python → wheel/sdist → GitHub Release
@@ -31,7 +31,12 @@ on:
         type: string
         default: 'publish'
       use_release_version:
-        description: 'Request -SNAPSHOT strip before Java publish (applied only on refs/heads/main)'
+        description: 'Request -SNAPSHOT strip before Java publish (applied only on refs/heads/main or refs/heads/master)'
+        required: false
+        type: boolean
+        default: false
+      advance_snapshot:
+        description: 'Whether to auto-advance Java version to next snapshot and push to branch (main/master only)'
         required: false
         type: boolean
         default: false
@@ -57,6 +62,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Resolve SDK name
         id: meta
@@ -164,14 +171,21 @@ jobs:
           inputs.language == 'java'
           && inputs.action == 'publish'
           && inputs.use_release_version
-          && github.ref == 'refs/heads/main'
+          && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
         working-directory: ${{ inputs.working_directory }}
         run: |
           CURRENT=$(mvn -q -DforceStdout help:evaluate -Dexpression=project.version)
           echo "Current version: $CURRENT"
           if echo "$CURRENT" | grep -q 'SNAPSHOT'; then
-            mvn -B org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
-              -DremoveSnapshot -DgenerateBackupPoms=false
+            if [ -f "${{ github.workspace }}/pom.xml" ] && [ "${{ inputs.working_directory }}" != "." ] && [ "${{ inputs.working_directory }}" != "./" ]; then
+              echo "Workspace-level root pom.xml found. Promoting parent and submodules at root."
+              mvn -B -f "${{ github.workspace }}/pom.xml" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
+                -DremoveSnapshot -DgenerateBackupPoms=false
+            else
+              echo "Promoting version locally in working directory."
+              mvn -B org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
+                -DremoveSnapshot -DgenerateBackupPoms=false
+            fi
           else
             echo "Already a release version — no change."
           fi
@@ -179,6 +193,9 @@ jobs:
       - name: Verify Java library
         if: inputs.language == 'java' && inputs.action == 'verify'
         working-directory: ${{ inputs.working_directory }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
         run: mvn -B clean verify -DskipTests
 
       - name: Build and Deploy Java library to GitHub Packages
@@ -187,7 +204,69 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
           GITHUB_ACTOR: ${{ github.actor }}
-        run: mvn -B clean deploy -DskipTests
+        run: |
+          mvn -B clean deploy -DskipTests > deploy.log 2>&1 || {
+            status=$?
+            cat deploy.log
+            if grep -q "status code: 409" deploy.log || grep -q "Conflict (409)" deploy.log; then
+              echo "WARNING: Library version already deployed (409 Conflict). Skipping deploy."
+              exit 0
+            else
+              exit $status
+            fi
+          }
+          cat deploy.log
+
+      - name: Advance library to next snapshot and push
+        if: >-
+          inputs.language == 'java'
+          && inputs.action == 'publish'
+          && inputs.use_release_version
+          && inputs.advance_snapshot
+          && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          if [ -f "${{ github.workspace }}/pom.xml" ] && [ "${{ inputs.working_directory }}" != "." ] && [ "${{ inputs.working_directory }}" != "./" ]; then
+            echo "Workspace-level root pom.xml found. Advancing parent and submodules at root."
+            mvn -B -f "${{ github.workspace }}/pom.xml" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
+              -DnextSnapshot=true -DgenerateBackupPoms=false
+            echo "Verifying root build compiles with next snapshot version..."
+            mvn -B -f "${{ github.workspace }}/pom.xml" clean compile -DskipTests
+          else
+            echo "Advancing version locally in working directory."
+            mvn -B org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
+              -DnextSnapshot=true -DgenerateBackupPoms=false
+            echo "Verifying local build compiles with next snapshot version..."
+            mvn -B clean compile -DskipTests
+          fi
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet; then
+            git add -u
+            git commit -m "chore: bump version to next snapshot version [skip ci]"
+            
+            BRANCH_NAME=$(echo "${{ github.ref }}" | sed 's|refs/heads/||')
+            MAX_RETRIES=5
+            for i in $(seq 1 $MAX_RETRIES); do
+              echo "Push attempt $i..."
+              git fetch origin
+              if git pull --rebase --autostash origin $BRANCH_NAME; then
+                if git push origin HEAD:${{ github.ref }}; then
+                  echo "Push succeeded!"
+                  exit 0
+                fi
+              else
+                echo "Rebase conflicted. Aborting and retrying..."
+                git rebase --abort
+              fi
+              echo "Waiting 5 seconds before retry..."
+              sleep 5
+            done
+            echo "Failed to push version bump after $MAX_RETRIES attempts."
+            exit 1
+          else
+            echo "No version changes detected."
+          fi
 
       # ── Flutter ─────────────────────────────────────────────────────────
       - name: Set up Flutter

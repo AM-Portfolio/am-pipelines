@@ -53,7 +53,7 @@ on:
 
 jobs:
   publish:
-    name: Build & Publish — ${{ inputs.sdk_name || inputs.working_directory }}
+    name: Publish ${{ inputs.sdk_name || inputs.working_directory }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

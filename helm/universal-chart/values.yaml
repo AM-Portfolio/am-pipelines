@@ -21,6 +21,9 @@ image:
 
 port: 8080
 
+service:
+  port: 8080
+
 # Security Defaults (Professional Standards)
 security:
   # automountServiceAccountToken: false # Now dynamically handled based on Vault status

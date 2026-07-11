@@ -68,7 +68,7 @@ jobs:
           fetch-depth: 0 # TruffleHog needs history to find leaks
 
       - name: TruffleHog OSS Scan
-        uses: trufflesecurity/trufflehog@main
+        uses: trufflesecurity/trufflehog@v3.94.3
         with:
           path: ./
           extra_args: --only-verified
@@ -88,7 +88,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Checkov Scan
-        uses: bridgecrewio/checkov-action@master
+        uses: bridgecrewio/checkov-action@v12
         with:
           directory: ./
           framework: helm,terraform,kubernetes
@@ -314,6 +314,7 @@ jobs:
           path: am-pipelines-repo
           ref: main
           token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          clean: true
 
       - name: Deploy to Dev via Helm
         shell: bash
@@ -391,6 +392,7 @@ jobs:
           path: am-pipelines-repo
           ref: main
           token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          clean: true
 
       - name: Deploy to Preprod via Helm
         shell: bash
@@ -480,6 +482,7 @@ jobs:
           path: am-pipelines-repo
           ref: main
           token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          clean: true
 
       - name: Deploy to Prod via Helm
         shell: bash

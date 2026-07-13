@@ -32,18 +32,18 @@ spec:
           {{- if eq $vaultKey "__jaas__" }}
           {{`export `}}{{ $moduleVar }}{{`="org.apache.kafka.common.security.scram.ScramLoginModule required username=\"{{ .Data.data.username }}\" password=\"{{ .Data.data.password }}\";"`}}
           {{- else }}
-          {{`{{- with index .Data.data `}}{{ $vaultKey | quote }}{{` -}}` }}
+          {{`{{- with index .Data.data `}}{{ $vaultKey | quote }}{{` }}` }}
           {{`export `}}{{ $moduleVar }}="{{`{{ . }}`}}"
-          {{`{{- end }}` }}
+          {{`{{ end }}` }}
           {{- end }}
           {{- end }}
           {{- else if and (not (kindIs "string" $v)) $v.template }}
           {{ $v.template | nindent 10 }}
           {{- else if and (not (kindIs "string" $v)) $v.keys }}
           {{- range $varName := $v.keys }}
-          {{`{{- with index .Data.data `}}{{ $varName | quote }}{{` -}}` }}
+          {{`{{- with index .Data.data `}}{{ $varName | quote }}{{` }}` }}
           export {{ $varName }}="{{`{{ . }}`}}"
-          {{`{{- end }}` }}
+          {{`{{ end }}` }}
           {{- end }}
           {{- else }}
           {{`{{- range $sk, $sv := .Data.data }}`}}

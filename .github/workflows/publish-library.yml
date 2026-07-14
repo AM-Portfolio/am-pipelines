@@ -358,7 +358,7 @@ jobs:
             git add -u
             git commit -m "chore: bump version to $NEXT_SNAPSHOT [skip ci]"
 
-            if git push origin HEAD:refs/heads/$BRANCH_NAME; then
+            if git push origin $BRANCH_NAME; then
               echo "Successfully pushed $NEXT_SNAPSHOT on attempt $i!"
               exit 0
             fi

@@ -178,7 +178,7 @@ jobs:
           inputs.language == 'java'
           && inputs.action == 'publish'
           && inputs.use_release_version
-          && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+          && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/develop')
         run: |
           ROOT_POM="${{ github.workspace }}/pom.xml"
           MODULE_DIR="${{ inputs.working_directory }}"

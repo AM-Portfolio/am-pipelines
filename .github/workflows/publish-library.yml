@@ -307,56 +307,68 @@ jobs:
           && inputs.use_release_version
           && inputs.advance_snapshot
           && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/develop')
-        working-directory: ${{ inputs.working_directory }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
-          if [ -f "${{ github.workspace }}/pom.xml" ] && [ "${{ inputs.working_directory }}" != "." ] && [ "${{ inputs.working_directory }}" != "./" ]; then
-            echo "Workspace-level root pom.xml found. Advancing parent and submodules at root."
-            mvn -B -f "${{ github.workspace }}/pom.xml" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
-              -DnextSnapshot=true -DgenerateBackupPoms=false
-            echo "Verifying root build compiles with next snapshot version..."
-            mvn -B -f "${{ github.workspace }}/pom.xml" clean compile -DskipTests
-          else
-            echo "Advancing version locally in working directory."
-            mvn -B org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
-              -DnextSnapshot=true -DgenerateBackupPoms=false
-            echo "Verifying local build compiles with next snapshot version..."
-            mvn -B clean compile -DskipTests
+          # Use the release version set by the promote step to compute next snapshot.
+          # This is deterministic and does NOT depend on the current working tree state.
+          RELEASE="${FINAL_RELEASE_VERSION}"
+          if [ -z "$RELEASE" ]; then
+            echo "FINAL_RELEASE_VERSION not set by promote step. Skipping snapshot advance."
+            exit 0
           fi
+
+          MAJOR=$(echo "$RELEASE" | cut -d. -f1)
+          MINOR=$(echo "$RELEASE" | cut -d. -f2)
+          PATCH=$(echo "$RELEASE" | cut -d. -f3)
+          NEXT_PATCH=$((PATCH + 1))
+          NEXT_SNAPSHOT="${MAJOR}.${MINOR}.${NEXT_PATCH}-SNAPSHOT"
+          echo "Published release: $RELEASE  ->  Next snapshot: $NEXT_SNAPSHOT"
+
+          ROOT_POM="${{ github.workspace }}/pom.xml"
+          WORKING_DIR="${{ inputs.working_directory }}"
+
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          if ! git diff --quiet; then
-            BRANCH_NAME=$(echo "${{ github.ref }}" | sed 's|refs/heads/||')
 
-            MAX_RETRIES=5
-            for i in $(seq 1 $MAX_RETRIES); do
-              echo "Push attempt $i of $MAX_RETRIES..."
+          BRANCH_NAME=$(echo "${{ github.ref }}" | sed 's|refs/heads/||')
 
-              # Always reset to the latest remote tip before committing.
-              # This avoids detached HEAD, merge-commit rebase issues, and history conflicts.
-              git fetch origin $BRANCH_NAME
-              git checkout -B $BRANCH_NAME origin/$BRANCH_NAME
+          MAX_RETRIES=5
+          for i in $(seq 1 $MAX_RETRIES); do
+            echo "Push attempt $i of $MAX_RETRIES..."
 
-              # Re-stage and commit the version bump files on top of the fresh tip.
-              git add -u
-              git commit -m "chore: bump version to next snapshot version [skip ci]" || {
-                echo "Nothing to commit. Exiting."
-                exit 0
-              }
+            # Reset to the latest remote tip cleanly (no detached HEAD, no rebase).
+            git fetch origin $BRANCH_NAME
+            git checkout -B $BRANCH_NAME origin/$BRANCH_NAME
 
-              if git push origin $BRANCH_NAME; then
-                echo "Push succeeded on attempt $i!"
-                exit 0
-              fi
+            # Re-apply the next snapshot version on this clean branch tip.
+            if [ -f "$ROOT_POM" ] && [ "$WORKING_DIR" != "." ] && [ "$WORKING_DIR" != "./" ]; then
+              mvn -B -f "$ROOT_POM" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
+                -DnewVersion="$NEXT_SNAPSHOT" -DgenerateBackupPoms=false
+            else
+              mvn -B -f "$ROOT_POM" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
+                -DnewVersion="$NEXT_SNAPSHOT" -DgenerateBackupPoms=false
+            fi
 
-              echo "Push failed. Waiting 5 seconds before retry..."
-              sleep 5
-            done
+            if git diff --quiet; then
+              echo "No changes after applying $NEXT_SNAPSHOT (already at this version?). Exiting."
+              exit 0
+            fi
 
-            echo "Failed to push version bump after $MAX_RETRIES attempts."
-            exit 1
-          else
-            echo "No version changes detected."
-          fi
+            git add -u
+            git commit -m "chore: bump version to $NEXT_SNAPSHOT [skip ci]"
+
+            if git push origin $BRANCH_NAME; then
+              echo "Successfully pushed $NEXT_SNAPSHOT on attempt $i!"
+              exit 0
+            fi
+
+            echo "Push failed. Waiting 5 seconds before retry..."
+            sleep 5
+          done
+
+          echo "Failed to push version bump after $MAX_RETRIES attempts."
+          exit 1
 
       # ── Flutter ─────────────────────────────────────────────────────────
       - name: Set up Flutter

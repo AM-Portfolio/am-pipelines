@@ -267,7 +267,7 @@ jobs:
           && inputs.action == 'publish'
           && inputs.use_release_version
           && inputs.advance_snapshot
-          && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+          && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/develop')
         working-directory: ${{ inputs.working_directory }}
         run: |
           if [ -f "${{ github.workspace }}/pom.xml" ] && [ "${{ inputs.working_directory }}" != "." ] && [ "${{ inputs.working_directory }}" != "./" ]; then
@@ -286,16 +286,22 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           if ! git diff --quiet; then
+            BRANCH_NAME=$(echo "${{ github.ref }}" | sed 's|refs/heads/||')
+            
+            # Fetch latest and checkout branch to avoid being in a detached HEAD on a merge commit.
+            # This prevents git rebase from flattening old feature branch history!
+            git fetch origin $BRANCH_NAME
+            git checkout -B $BRANCH_NAME origin/$BRANCH_NAME
+            
             git add -u
             git commit -m "chore: bump version to next snapshot version [skip ci]"
             
-            BRANCH_NAME=$(echo "${{ github.ref }}" | sed 's|refs/heads/||')
             MAX_RETRIES=5
             for i in $(seq 1 $MAX_RETRIES); do
               echo "Push attempt $i..."
-              git fetch origin
-              if git pull --rebase --autostash origin $BRANCH_NAME; then
-                if git push origin HEAD:${{ github.ref }}; then
+              git fetch origin $BRANCH_NAME
+              if git pull --rebase origin $BRANCH_NAME; then
+                if git push origin $BRANCH_NAME; then
                   echo "Push succeeded!"
                   exit 0
                 fi

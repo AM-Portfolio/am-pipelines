@@ -57,11 +57,17 @@ jobs:
         shell: bash
         run: |
           BASE_VALUES="${{ inputs.working_directory }}/helm/values.yaml"
+          MAPPING_VALUES="${{ inputs.working_directory }}/helm/vault-mappings.yaml"
           ENV_VALUES="${{ inputs.working_directory }}/helm/values.${{ inputs.environment }}.yaml"
 
           VALUES_ARG=""
           if [ -f "$BASE_VALUES" ]; then
             VALUES_ARG="-f \"$BASE_VALUES\""
+          fi
+          # Required for vault.secretPaths.*.mappings (same as central-build-publish).
+          # Without this, init/env mapping is dropped and apps fail (e.g. POSTGRES_HOST).
+          if [ -f "$MAPPING_VALUES" ]; then
+            VALUES_ARG="$VALUES_ARG -f \"$MAPPING_VALUES\""
           fi
           # Check for env specific values (supports both preprod and prod)
           if [ -f "$ENV_VALUES" ]; then

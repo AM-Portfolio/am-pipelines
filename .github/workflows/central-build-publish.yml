@@ -48,8 +48,8 @@ on:
       deploy_prod:
         required: false
         type: boolean
-        default: false
-        description: "Set to true to enable the prod deployment stage after preprod"
+        default: true
+        description: "Set to true to enable the prod deployment stage (parallel with preprod)"
 
 jobs:
   # ============================================================
@@ -453,17 +453,13 @@ jobs:
   # ============================================================
   # DEPLOY — PROD
   # Self-hosted runner | environment: prod (requires approval)
-  # Only runs after preprod succeeds AND deploy_prod == true
+  # Runs in parallel with preprod when deploy_prod == true
   # ============================================================
   deploy-prod:
     name: Deploy → Prod
-    needs: [deploy-preprod]
+    needs: [build, vulnerability-scan, misconfig-scan, security-scan]
     runs-on: [self-hosted, linux, x64, docker]
-    if: |
-      always() && 
-      needs.deploy-preprod.result == 'success' && 
-      inputs.image_name != '' && 
-      inputs.deploy_prod == true
+    if: ${{ inputs.image_name != '' && inputs.deploy_prod == true }}
     environment: prod-${{ inputs.image_name }} # ⏸ Pauses for prod approval
     permissions:
       contents: read

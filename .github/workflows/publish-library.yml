@@ -326,31 +326,32 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           if ! git diff --quiet; then
             BRANCH_NAME=$(echo "${{ github.ref }}" | sed 's|refs/heads/||')
-            
-            # Fetch latest and checkout branch to avoid being in a detached HEAD on a merge commit.
-            # This prevents git rebase from flattening old feature branch history!
-            git fetch origin $BRANCH_NAME
-            git checkout -B $BRANCH_NAME origin/$BRANCH_NAME
-            
-            git add -u
-            git commit -m "chore: bump version to next snapshot version [skip ci]"
-            
+
             MAX_RETRIES=5
             for i in $(seq 1 $MAX_RETRIES); do
-              echo "Push attempt $i..."
+              echo "Push attempt $i of $MAX_RETRIES..."
+
+              # Always reset to the latest remote tip before committing.
+              # This avoids detached HEAD, merge-commit rebase issues, and history conflicts.
               git fetch origin $BRANCH_NAME
-              if git pull --rebase origin $BRANCH_NAME; then
-                if git push origin $BRANCH_NAME; then
-                  echo "Push succeeded!"
-                  exit 0
-                fi
-              else
-                echo "Rebase conflicted. Aborting and retrying..."
-                git rebase --abort
+              git checkout -B $BRANCH_NAME origin/$BRANCH_NAME
+
+              # Re-stage and commit the version bump files on top of the fresh tip.
+              git add -u
+              git commit -m "chore: bump version to next snapshot version [skip ci]" || {
+                echo "Nothing to commit. Exiting."
+                exit 0
+              }
+
+              if git push origin $BRANCH_NAME; then
+                echo "Push succeeded on attempt $i!"
+                exit 0
               fi
-              echo "Waiting 5 seconds before retry..."
+
+              echo "Push failed. Waiting 5 seconds before retry..."
               sleep 5
             done
+
             echo "Failed to push version bump after $MAX_RETRIES attempts."
             exit 1
           else

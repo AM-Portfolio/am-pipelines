@@ -280,11 +280,11 @@ jobs:
   # ============================================================
   # DEPLOY — DEV
   # Self-hosted runner | environment: dev
-  # Automatically triggers on every push
+  # Runs in parallel with preprod and prod after build + scans
   # ============================================================
   deploy-dev:
     name: Deploy → Dev
-    needs: [build]
+    needs: [build, vulnerability-scan, misconfig-scan, security-scan]
     runs-on: [self-hosted, linux, x64, docker]
     if: ${{ inputs.image_name != '' && inputs.deploy_dev == true }}
     environment: dev-${{ inputs.image_name }} # Tracking only (no approval by default)
@@ -367,7 +367,7 @@ jobs:
   # ============================================================
   # DEPLOY — PREPROD
   # Self-hosted runner | environment: preprod (requires approval)
-  # Helm upgrade → kubectl rollout verify
+  # Parallel with deploy-dev and deploy-prod
   # ============================================================
   deploy-preprod:
     name: Deploy → Preprod
@@ -453,7 +453,7 @@ jobs:
   # ============================================================
   # DEPLOY — PROD
   # Self-hosted runner | environment: prod (requires approval)
-  # Runs in parallel with preprod when deploy_prod == true
+  # Parallel with deploy-dev and deploy-preprod when deploy_prod == true
   # ============================================================
   deploy-prod:
     name: Deploy → Prod

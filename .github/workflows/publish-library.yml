@@ -178,11 +178,45 @@ jobs:
           inputs.language == 'java'
           && inputs.action == 'publish'
           && inputs.use_release_version
-          && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/test-pipeline-proxy')
+          && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/develop')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+          MAVEN_REPO_URL: ${{ inputs.maven_repo_url }}
         run: |
           ROOT_POM="${{ github.workspace }}/pom.xml"
           MODULE_DIR="${{ inputs.working_directory }}"
           MODULE_POM="${{ github.workspace }}/${MODULE_DIR}/pom.xml"
+
+          bump_if_exists() {
+            local POM_FILE="$1"
+            local RELEASE
+            RELEASE=$(mvn -N -q -f "$POM_FILE" -DforceStdout help:evaluate -Dexpression=project.version 2>/dev/null)
+
+            # Auto-increment patch version if this release already exists in the registry
+            while true; do
+              GROUP_ID=$(mvn -N -q -f "$POM_FILE" -DforceStdout help:evaluate -Dexpression=project.groupId 2>/dev/null)
+              ARTIFACT_ID=$(mvn -N -q -f "$POM_FILE" -DforceStdout help:evaluate -Dexpression=project.artifactId 2>/dev/null)
+              GROUP_PATH=$(echo "$GROUP_ID" | tr '.' '/')
+              CHECK_URL="${MAVEN_REPO_URL}/${GROUP_PATH}/${ARTIFACT_ID}/${RELEASE}/${ARTIFACT_ID}-${RELEASE}.pom"
+              HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+                -H "Authorization: Bearer $GITHUB_TOKEN" "$CHECK_URL")
+              echo "Registry check for $RELEASE → HTTP $HTTP_STATUS"
+              if [ "$HTTP_STATUS" == "200" ]; then
+                echo "Version $RELEASE already exists in registry. Auto-incrementing patch version."
+                MAJOR=$(echo "$RELEASE" | cut -d. -f1)
+                MINOR=$(echo "$RELEASE" | cut -d. -f2)
+                PATCH=$(echo "$RELEASE" | cut -d. -f3 | sed 's/-.*//')
+                PATCH=$((PATCH + 1))
+                RELEASE="${MAJOR}.${MINOR}.${PATCH}"
+                mvn -B -f "$POM_FILE" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
+                  -DnewVersion="$RELEASE" -DgenerateBackupPoms=false
+              else
+                echo "Version $RELEASE is free. Proceeding with publish."
+                break
+              fi
+            done
+            echo "FINAL_RELEASE_VERSION=$RELEASE" >> "$GITHUB_ENV"
+          }
 
           if [ -f "$ROOT_POM" ] && [ "$MODULE_DIR" != "." ] && [ "$MODULE_DIR" != "./" ]; then
             echo "Workspace-level root pom.xml found. Evaluating and promoting from reactor root."
@@ -195,11 +229,12 @@ jobs:
               echo "Already a release version — no change."
             fi
 
-            RELEASE=$(mvn -N -q -f "$ROOT_POM" -DforceStdout help:evaluate -Dexpression=project.version)
+            bump_if_exists "$ROOT_POM"
+            RELEASE="$FINAL_RELEASE_VERSION"
             echo "Release version: $RELEASE"
 
             # Keep the target module aligned with the promoted root (covers modules outside the reactor).
-            perl -i -0pe "s/(<artifactId>am-core-services<\\/artifactId>\\s*<version>)[^<]+(<\\/version>)/\${1}${RELEASE}\${2}/" "$MODULE_POM"
+            perl -i -0pe "s/(<artifactId>am-core-services<\/artifactId>\s*<version>)[^<]+(<\/version>)/\${1}${RELEASE}\${2}/" "$MODULE_POM"
 
             if grep -Fq "<module>${MODULE_DIR}</module>" "$ROOT_POM"; then
               mvn -B -f "$ROOT_POM" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
@@ -218,6 +253,10 @@ jobs:
             else
               echo "Already a release version — no change."
             fi
+
+            bump_if_exists "$MODULE_POM"
+            RELEASE="$FINAL_RELEASE_VERSION"
+            echo "Release version: $RELEASE"
           fi
 
       - name: Verify Java library

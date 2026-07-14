@@ -178,7 +178,7 @@ jobs:
           inputs.language == 'java'
           && inputs.action == 'publish'
           && inputs.use_release_version
-          && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/develop')
+          && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/test-pipeline-proxy')
         run: |
           ROOT_POM="${{ github.workspace }}/pom.xml"
           MODULE_DIR="${{ inputs.working_directory }}"
@@ -267,7 +267,7 @@ jobs:
           && inputs.action == 'publish'
           && inputs.use_release_version
           && inputs.advance_snapshot
-          && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/develop')
+          && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/test-pipeline-proxy')
         working-directory: ${{ inputs.working_directory }}
         run: |
           if [ -f "${{ github.workspace }}/pom.xml" ] && [ "${{ inputs.working_directory }}" != "." ] && [ "${{ inputs.working_directory }}" != "./" ]; then

@@ -179,10 +179,44 @@ jobs:
           && inputs.action == 'publish'
           && inputs.use_release_version
           && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+          MAVEN_REPO_URL: ${{ inputs.maven_repo_url }}
         run: |
           ROOT_POM="${{ github.workspace }}/pom.xml"
           MODULE_DIR="${{ inputs.working_directory }}"
           MODULE_POM="${{ github.workspace }}/${MODULE_DIR}/pom.xml"
+
+          bump_if_exists() {
+            local POM_FILE="$1"
+            local RELEASE
+            RELEASE=$(mvn -N -q -f "$POM_FILE" -DforceStdout help:evaluate -Dexpression=project.version 2>/dev/null)
+
+            # Auto-increment patch version if this release already exists in the registry
+            while true; do
+              GROUP_ID=$(mvn -N -q -f "$POM_FILE" -DforceStdout help:evaluate -Dexpression=project.groupId 2>/dev/null)
+              ARTIFACT_ID=$(mvn -N -q -f "$POM_FILE" -DforceStdout help:evaluate -Dexpression=project.artifactId 2>/dev/null)
+              GROUP_PATH=$(echo "$GROUP_ID" | tr '.' '/')
+              CHECK_URL="${MAVEN_REPO_URL}/${GROUP_PATH}/${ARTIFACT_ID}/${RELEASE}/${ARTIFACT_ID}-${RELEASE}.pom"
+              HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+                -H "Authorization: Bearer $GITHUB_TOKEN" "$CHECK_URL")
+              echo "Registry check for $RELEASE -> HTTP $HTTP_STATUS"
+              if [ "$HTTP_STATUS" == "200" ]; then
+                echo "Version $RELEASE already exists in registry. Auto-incrementing patch version."
+                MAJOR=$(echo "$RELEASE" | cut -d. -f1)
+                MINOR=$(echo "$RELEASE" | cut -d. -f2)
+                PATCH=$(echo "$RELEASE" | cut -d. -f3 | sed 's/-.*//')
+                PATCH=$((PATCH + 1))
+                RELEASE="${MAJOR}.${MINOR}.${PATCH}"
+                mvn -B -f "$POM_FILE" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
+                  -DnewVersion="$RELEASE" -DgenerateBackupPoms=false
+              else
+                echo "Version $RELEASE is free. Proceeding with publish."
+                break
+              fi
+            done
+            echo "FINAL_RELEASE_VERSION=$RELEASE" >> "$GITHUB_ENV"
+          }
 
           if [ -f "$ROOT_POM" ] && [ "$MODULE_DIR" != "." ] && [ "$MODULE_DIR" != "./" ]; then
             echo "Workspace-level root pom.xml found. Evaluating and promoting from reactor root."
@@ -195,11 +229,12 @@ jobs:
               echo "Already a release version — no change."
             fi
 
-            RELEASE=$(mvn -N -q -f "$ROOT_POM" -DforceStdout help:evaluate -Dexpression=project.version)
+            bump_if_exists "$ROOT_POM"
+            RELEASE="$FINAL_RELEASE_VERSION"
             echo "Release version: $RELEASE"
 
             # Keep the target module aligned with the promoted root (covers modules outside the reactor).
-            perl -i -0pe "s/(<artifactId>am-core-services<\\/artifactId>\\s*<version>)[^<]+(<\\/version>)/\${1}${RELEASE}\${2}/" "$MODULE_POM"
+            perl -i -0pe "s/(<artifactId>am-core-services<\/artifactId>\s*<version>)[^<]+(<\/version>)/\${1}${RELEASE}\${2}/" "$MODULE_POM"
 
             if grep -Fq "<module>${MODULE_DIR}</module>" "$ROOT_POM"; then
               mvn -B -f "$ROOT_POM" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
@@ -218,6 +253,10 @@ jobs:
             else
               echo "Already a release version — no change."
             fi
+
+            bump_if_exists "$MODULE_POM"
+            RELEASE="$FINAL_RELEASE_VERSION"
+            echo "Release version: $RELEASE"
           fi
 
       - name: Verify Java library
@@ -268,49 +307,68 @@ jobs:
           && inputs.use_release_version
           && inputs.advance_snapshot
           && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
-        working-directory: ${{ inputs.working_directory }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
-          if [ -f "${{ github.workspace }}/pom.xml" ] && [ "${{ inputs.working_directory }}" != "." ] && [ "${{ inputs.working_directory }}" != "./" ]; then
-            echo "Workspace-level root pom.xml found. Advancing parent and submodules at root."
-            mvn -B -f "${{ github.workspace }}/pom.xml" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
-              -DnextSnapshot=true -DgenerateBackupPoms=false
-            echo "Verifying root build compiles with next snapshot version..."
-            mvn -B -f "${{ github.workspace }}/pom.xml" clean compile -DskipTests
-          else
-            echo "Advancing version locally in working directory."
-            mvn -B org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
-              -DnextSnapshot=true -DgenerateBackupPoms=false
-            echo "Verifying local build compiles with next snapshot version..."
-            mvn -B clean compile -DskipTests
+          # Use the release version set by the promote step to compute next snapshot.
+          # This is deterministic and does NOT depend on the current working tree state.
+          RELEASE="${FINAL_RELEASE_VERSION}"
+          if [ -z "$RELEASE" ]; then
+            echo "FINAL_RELEASE_VERSION not set by promote step. Skipping snapshot advance."
+            exit 0
           fi
+
+          MAJOR=$(echo "$RELEASE" | cut -d. -f1)
+          MINOR=$(echo "$RELEASE" | cut -d. -f2)
+          PATCH=$(echo "$RELEASE" | cut -d. -f3)
+          NEXT_PATCH=$((PATCH + 1))
+          NEXT_SNAPSHOT="${MAJOR}.${MINOR}.${NEXT_PATCH}-SNAPSHOT"
+          echo "Published release: $RELEASE  ->  Next snapshot: $NEXT_SNAPSHOT"
+
+          ROOT_POM="${{ github.workspace }}/pom.xml"
+          WORKING_DIR="${{ inputs.working_directory }}"
+
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          if ! git diff --quiet; then
+
+          BRANCH_NAME=$(echo "${{ github.ref }}" | sed 's|refs/heads/||')
+
+          MAX_RETRIES=5
+          for i in $(seq 1 $MAX_RETRIES); do
+            echo "Push attempt $i of $MAX_RETRIES..."
+
+            # Reset to the latest remote tip cleanly (no detached HEAD, no rebase).
+            git fetch origin $BRANCH_NAME
+            git checkout -B $BRANCH_NAME origin/$BRANCH_NAME
+
+            # Re-apply the next snapshot version on this clean branch tip.
+            if [ -f "$ROOT_POM" ] && [ "$WORKING_DIR" != "." ] && [ "$WORKING_DIR" != "./" ]; then
+              mvn -B -f "$ROOT_POM" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
+                -DnewVersion="$NEXT_SNAPSHOT" -DgenerateBackupPoms=false
+            else
+              mvn -B -f "$ROOT_POM" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
+                -DnewVersion="$NEXT_SNAPSHOT" -DgenerateBackupPoms=false
+            fi
+
+            if git diff --quiet; then
+              echo "No changes after applying $NEXT_SNAPSHOT (already at this version?). Exiting."
+              exit 0
+            fi
+
             git add -u
-            git commit -m "chore: bump version to next snapshot version [skip ci]"
-            
-            BRANCH_NAME=$(echo "${{ github.ref }}" | sed 's|refs/heads/||')
-            MAX_RETRIES=5
-            for i in $(seq 1 $MAX_RETRIES); do
-              echo "Push attempt $i..."
-              git fetch origin
-              if git pull --rebase --autostash origin $BRANCH_NAME; then
-                if git push origin HEAD:${{ github.ref }}; then
-                  echo "Push succeeded!"
-                  exit 0
-                fi
-              else
-                echo "Rebase conflicted. Aborting and retrying..."
-                git rebase --abort
-              fi
-              echo "Waiting 5 seconds before retry..."
-              sleep 5
-            done
-            echo "Failed to push version bump after $MAX_RETRIES attempts."
-            exit 1
-          else
-            echo "No version changes detected."
-          fi
+            git commit -m "chore: bump version to $NEXT_SNAPSHOT [skip ci]"
+
+            if git push origin $BRANCH_NAME; then
+              echo "Successfully pushed $NEXT_SNAPSHOT on attempt $i!"
+              exit 0
+            fi
+
+            echo "Push failed. Waiting 5 seconds before retry..."
+            sleep 5
+          done
+
+          echo "Failed to push version bump after $MAX_RETRIES attempts."
+          exit 1
 
       # ── Flutter ─────────────────────────────────────────────────────────
       - name: Set up Flutter

@@ -16,6 +16,9 @@ spec:
       labels:
         {{- include "universal-chart.selectorLabels" . | nindent 8 }}
       annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         {{- if $vaultEnabled }}
         # Vault Agent Sidecar Injector
         vault.hashicorp.com/agent-inject: "true"

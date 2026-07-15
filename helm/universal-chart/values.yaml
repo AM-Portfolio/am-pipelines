@@ -40,6 +40,9 @@ resources:
 
 env: {}
 
+# Optional pod template annotations (e.g. prometheus.io/scrape for am-observability)
+podAnnotations: {}
+
 ingress:
   enabled: false
   className: ""

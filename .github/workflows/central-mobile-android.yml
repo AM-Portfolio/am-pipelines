@@ -155,7 +155,7 @@ jobs:
           ARTIFACT_NAME="android-${{ inputs.build_mode }}-${{ github.run_id }}"
           echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
 
-          mkdir -p "$GITHUB_WORKSPACE/.android-ci-out"
+          mkdir -p "$GITHUB_WORKSPACE/android-ci-out"
 
           if [ "${{ inputs.artifact_type }}" = "appbundle" ]; then
             SRC=$(find build/app/outputs/bundle -name "*.aab" 2>/dev/null | head -n 1)
@@ -164,7 +164,7 @@ jobs:
               find build/app/outputs -type f 2>/dev/null || true
               exit 1
             fi
-            cp "$SRC" "$GITHUB_WORKSPACE/.android-ci-out/"
+            cp "$SRC" "$GITHUB_WORKSPACE/android-ci-out/"
           else
             SRC=$(find build/app/outputs/flutter-apk -name "*.apk" 2>/dev/null | head -n 1)
             if [ -z "$SRC" ]; then
@@ -176,11 +176,11 @@ jobs:
               find build/app/outputs -type f 2>/dev/null || true
               exit 1
             fi
-            cp "$SRC" "$GITHUB_WORKSPACE/.android-ci-out/"
+            cp "$SRC" "$GITHUB_WORKSPACE/android-ci-out/"
           fi
 
           echo "Staged artifact(s):"
-          ls -la "$GITHUB_WORKSPACE/.android-ci-out"
+          ls -la "$GITHUB_WORKSPACE/android-ci-out"
           if [ -n "${{ inputs.package_name }}" ]; then
             echo "package_name=${{ inputs.package_name }}"
           fi
@@ -190,7 +190,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.meta.outputs.artifact_name }}
-          path: ${{ github.workspace }}/.android-ci-out/
+          path: ${{ github.workspace }}/android-ci-out/
           if-no-files-found: error
           retention-days: 14
 

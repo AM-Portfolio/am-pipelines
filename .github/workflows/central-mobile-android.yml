@@ -101,8 +101,25 @@ jobs:
       - name: Flutter doctor
         run: flutter doctor -v
 
-      - name: Resolve dependencies
-        run: flutter pub get
+      - name: Resolve and Generate Code for All Modules
+        working-directory: ${{ github.workspace }}
+        run: |
+          dirs=$(find . -name "pubspec.yaml" -not -path "*/.*" -exec dirname {} \;)
+          for dir in $dirs; do
+            echo "----------------------------------------"
+            echo "Processing module in: $dir"
+            echo "----------------------------------------"
+            (
+              cd "$dir"
+              flutter pub get
+              if grep -q "build_runner:" pubspec.yaml; then
+                echo "Running build_runner in $dir..."
+                dart run build_runner build --delete-conflicting-outputs
+              else
+                echo "No build_runner dependency found in $dir"
+              fi
+            )
+          done
 
       - name: Flutter analyze
         if: ${{ inputs.run_analyze }}

@@ -10,6 +10,14 @@ data:
 {{ toYaml .Values.configMap.data | indent 2 }}
   {{- else }}
   config.json: |
-    { "domain": {{ and .Values.appConfig .Values.appConfig.domain | quote }} }
+    {
+      "domain": {{ and .Values.appConfig .Values.appConfig.domain | quote }},
+      "env": {{ .Values.environment | default "dev" | quote }}
+      {{- if and .Values.appConfig .Values.appConfig.googleWebClientId }},
+      "google": {
+        "webClientId": {{ .Values.appConfig.googleWebClientId | quote }}
+      }
+      {{- end }}
+    }
   {{- end }}
 {{- end }}

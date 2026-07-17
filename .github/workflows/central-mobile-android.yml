@@ -136,6 +136,23 @@ jobs:
             echo "No test/ directory — skipping flutter test."
           fi
 
+      - name: Decode Android Keystore
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        shell: bash
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android/app/am_investment_keystore.jks
+
+      - name: Create key.properties
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        shell: bash
+        run: |
+          cat <<EOF > android/key.properties
+          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          storeFile=am_investment_keystore.jks
+          EOF
+
       - name: Build Android APK (debug)
         if: ${{ inputs.artifact_type == 'apk' && inputs.build_mode == 'debug' }}
         run: flutter build apk --debug
@@ -237,11 +254,20 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Phase 5 placeholder - Play Internal
-        run: |
-          echo "SKIP: Android -> Preprod is stubbed in Phase 1."
-          echo "Phase 5 will upload a signed AAB to Play Console Internal testing."
-          echo "Build artifact from this run: ${{ needs.android-build.outputs.artifact_name }}"
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.android-build.outputs.artifact_name }}
+          path: android-out
+
+      - name: Upload to Google Play Internal Testing
+        uses: r0adkll/upload-google-play-action@v1
+        with:
+          serviceAccountJson: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
+          packageName: ${{ inputs.package_name }}
+          releaseFiles: ${{ github.workspace }}/android-out/*.aab
+          track: internal
+          status: completed
 
   # ============================================================
   # PROD - Play Production (implemented in Phase 6; main only)

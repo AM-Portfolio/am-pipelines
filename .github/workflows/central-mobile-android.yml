@@ -164,10 +164,13 @@ jobs:
         if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
         shell: bash
         run: |
+          CLEAN_STORE_PASSWORD=$(printf '%s' "$ANDROID_KEYSTORE_PASSWORD" | tr -d '\r\n')
+          CLEAN_KEY_PASSWORD=$(printf '%s' "$ANDROID_KEY_PASSWORD" | tr -d '\r\n')
+          CLEAN_KEY_ALIAS=$(printf '%s' "$ANDROID_KEY_ALIAS" | tr -d '\r\n')
           cat <<EOF > android/key.properties
-          storePassword=$ANDROID_KEYSTORE_PASSWORD
-          keyPassword=$ANDROID_KEY_PASSWORD
-          keyAlias=$ANDROID_KEY_ALIAS
+          storePassword=$CLEAN_STORE_PASSWORD
+          keyPassword=$CLEAN_KEY_PASSWORD
+          keyAlias=$CLEAN_KEY_ALIAS
           storeFile=am_investment_keystore.jks
           EOF
 

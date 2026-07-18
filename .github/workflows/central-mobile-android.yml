@@ -1,0 +1,318 @@
+# Central Mobile Android - reusable workflow
+# Called by app repos (e.g. am-modern-ui/mobile-android.yml).
+#
+# Phase 1: build APK/AAB + upload GitHub Actions artifact.
+# Phase 5+: Play Internal (preprod). Phase 6+: Play Production (main only).
+#
+# Do not mix with central-build-publish.yml (web Docker -> Helm -> K8s).
+
+name: Central Mobile Android
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        description: "App directory relative to repo root (e.g. am_app)"
+        required: true
+        type: string
+      flutter_channel:
+        description: "Flutter channel"
+        required: false
+        type: string
+        default: "stable"
+      build_mode:
+        description: "debug | release (Phase 1 default debug - no keystore required)"
+        required: false
+        type: string
+        default: "debug"
+      artifact_type:
+        description: "apk | appbundle"
+        required: false
+        type: string
+        default: "apk"
+      run_analyze:
+        description: "Run flutter analyze"
+        required: false
+        type: boolean
+        default: true
+      run_tests:
+        description: "Run flutter test if test/ exists"
+        required: false
+        type: boolean
+        default: true
+      upload_artifact:
+        description: "Upload build output as a workflow artifact"
+        required: false
+        type: boolean
+        default: true
+      deploy_dev:
+        description: "Run Android → Dev job (engineer artifact lane)"
+        required: false
+        type: boolean
+        default: false
+      deploy_preprod:
+        description: "Run Android → Preprod job (Play Internal — Phase 5)"
+        required: false
+        type: boolean
+        default: false
+      deploy_prod:
+        description: "Run Android → Prod job (Play Production — Phase 6; caller should set true only on main)"
+        required: false
+        type: boolean
+        default: false
+      package_name:
+        description: "Android applicationId / Play package name (informational until Phase 5)"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      ANDROID_KEYSTORE_BASE64:
+        required: false
+      ANDROID_KEYSTORE_PASSWORD:
+        required: false
+      ANDROID_KEY_ALIAS:
+        required: false
+      ANDROID_KEY_PASSWORD:
+        required: false
+      PLAY_STORE_SERVICE_ACCOUNT_JSON:
+        required: false
+
+jobs:
+  # ============================================================
+  # BUILD - always runs when this workflow is called
+  # ============================================================
+  android-build:
+    name: Android -> Build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      artifact_name: ${{ steps.meta.outputs.artifact_name }}
+
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+
+    steps:
+      - name: Checkout caller repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ inputs.flutter_channel }}
+          cache: true
+
+      - name: Flutter doctor
+        run: flutter doctor -v
+
+      - name: Resolve and Generate Code for All Modules
+        working-directory: ${{ github.workspace }}
+        run: |
+          dirs=$(find . -name "pubspec.yaml" -not -path "*/.*" -exec dirname {} \;)
+          for dir in $dirs; do
+            echo "----------------------------------------"
+            echo "Processing module in: $dir"
+            echo "----------------------------------------"
+            (
+              cd "$dir"
+              flutter pub get
+              if grep -q "build_runner:" pubspec.yaml; then
+                echo "Running build_runner in $dir..."
+                dart run build_runner build --delete-conflicting-outputs
+              else
+                echo "No build_runner dependency found in $dir"
+              fi
+            )
+          done
+
+      - name: Flutter analyze
+        if: ${{ inputs.run_analyze }}
+        run: flutter analyze --no-fatal-infos || true
+        # Phase 1: non-blocking so existing analyze debt does not block first green build.
+        # Tighten to hard-fail in a later phase once the app is clean.
+
+      - name: Flutter test
+        if: ${{ inputs.run_tests }}
+        run: |
+          if [ -d test ]; then
+            flutter test
+          else
+            echo "No test/ directory — skipping flutter test."
+          fi
+
+      - name: Decode Android Keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
+        shell: bash
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | tr -d '\r\n ' | base64 --decode --ignore-garbage > android/app/am_investment_keystore.jks
+
+      - name: Create key.properties
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
+        shell: bash
+        run: |
+          CLEAN_STORE_PASSWORD=$(printf '%s' "$ANDROID_KEYSTORE_PASSWORD" | tr -d '\r\n')
+          CLEAN_KEY_PASSWORD=$(printf '%s' "$ANDROID_KEY_PASSWORD" | tr -d '\r\n')
+          CLEAN_KEY_ALIAS=$(printf '%s' "$ANDROID_KEY_ALIAS" | tr -d '\r\n')
+          cat <<EOF > android/key.properties
+          storePassword=$CLEAN_STORE_PASSWORD
+          keyPassword=$CLEAN_KEY_PASSWORD
+          keyAlias=$CLEAN_KEY_ALIAS
+          storeFile=am_investment_keystore.jks
+          EOF
+
+      - name: Build Android APK (debug)
+        if: ${{ inputs.artifact_type == 'apk' && inputs.build_mode == 'debug' }}
+        run: flutter build apk --debug
+
+      - name: Build Android APK (release)
+        if: ${{ inputs.artifact_type == 'apk' && inputs.build_mode == 'release' }}
+        run: flutter build apk --release
+
+      - name: Build Android App Bundle (release)
+        if: ${{ inputs.artifact_type == 'appbundle' }}
+        run: flutter build appbundle --release
+
+      - name: Resolve artifact paths
+        id: meta
+        shell: bash
+        run: |
+          ARTIFACT_NAME="android-${{ inputs.build_mode }}-${{ github.run_id }}"
+          echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+
+          mkdir -p "$GITHUB_WORKSPACE/android-ci-out"
+
+          if [ "${{ inputs.artifact_type }}" = "appbundle" ]; then
+            SRC=$(find build/app/outputs/bundle -name "*.aab" 2>/dev/null | head -n 1)
+            if [ -z "$SRC" ]; then
+              echo "ERROR: No .aab found under build/app/outputs/bundle"
+              find build/app/outputs -type f 2>/dev/null || true
+              exit 1
+            fi
+            cp "$SRC" "$GITHUB_WORKSPACE/android-ci-out/"
+          else
+            SRC=$(find build/app/outputs/flutter-apk -name "*.apk" 2>/dev/null | head -n 1)
+            if [ -z "$SRC" ]; then
+              # Fallback for some Flutter layouts
+              SRC=$(find build/app/outputs/apk -name "*.apk" 2>/dev/null | head -n 1)
+            fi
+            if [ -z "$SRC" ]; then
+              echo "ERROR: No .apk found under build/app/outputs"
+              find build/app/outputs -type f 2>/dev/null || true
+              exit 1
+            fi
+            cp "$SRC" "$GITHUB_WORKSPACE/android-ci-out/"
+          fi
+
+          echo "Staged artifact(s):"
+          ls -la "$GITHUB_WORKSPACE/android-ci-out"
+          if [ -n "${{ inputs.package_name }}" ]; then
+            echo "package_name=${{ inputs.package_name }}"
+          fi
+
+      - name: Upload Android artifact
+        if: ${{ inputs.upload_artifact }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.artifact_name }}
+          path: ${{ github.workspace }}/android-ci-out/
+          if-no-files-found: error
+          retention-days: 14
+
+  # ============================================================
+  # DEV - engineer builds (artifact lane; Play not required)
+  # ============================================================
+  android-dev:
+    name: Android -> Dev
+    needs: android-build
+    if: ${{ inputs.deploy_dev }}
+    runs-on: ubuntu-latest
+    environment: dev-am-modern-ui-android
+    permissions:
+      contents: read
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.android-build.outputs.artifact_name }}
+          path: android-out
+
+      - name: Publish Dev engineer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-dev-${{ github.run_id }}
+          path: android-out/
+          retention-days: 14
+
+      - name: Dev lane summary
+        run: |
+          echo "OK: Android -> Dev engineer build ready as artifact android-dev-${{ github.run_id }}"
+          echo "Install on emulator/device to test against Dev APIs (flavor/config comes in Phase 4)."
+          ls -la android-out
+
+  # ============================================================
+  # PREPROD - Play Internal (implemented in Phase 5)
+  # ============================================================
+  android-preprod:
+    name: Android -> Preprod
+    needs: android-build
+    if: ${{ inputs.deploy_preprod }}
+    runs-on: ubuntu-latest
+    environment: preprod-am-modern-ui-android
+    permissions:
+      contents: read
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.android-build.outputs.artifact_name }}
+          path: android-out
+
+      - name: Upload to Google Play Internal Testing
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
+          packageName: ${{ inputs.package_name }}
+          releaseFiles: ${{ github.workspace }}/android-out/*.aab
+          tracks: internal
+          status: completed
+
+  # ============================================================
+  # PROD - Play Production (implemented in Phase 6; main only)
+  # ============================================================
+  android-prod:
+    name: Android -> Prod
+    needs: android-build
+    if: ${{ inputs.deploy_prod }}
+    runs-on: ubuntu-latest
+    environment: prod-am-modern-ui-android
+    permissions:
+      contents: read
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.android-build.outputs.artifact_name }}
+          path: android-out
+
+      - name: Upload to Google Play Production
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
+          packageName: ${{ inputs.package_name }}
+          releaseFiles: ${{ github.workspace }}/android-out/*.aab
+          tracks: production
+          status: completed

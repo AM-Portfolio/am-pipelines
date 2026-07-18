@@ -153,7 +153,7 @@ jobs:
         if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
         shell: bash
         run: |
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/am_investment_keystore.jks
+          echo "$ANDROID_KEYSTORE_BASE64" | tr -d '\r\n ' | base64 --decode > android/app/am_investment_keystore.jks
 
       - name: Create key.properties
         env:
@@ -299,9 +299,17 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Phase 6 placeholder - Play Production
-        run: |
-          echo "SKIP: Android -> Prod is stubbed in Phase 1."
-          echo "Caller must set deploy_prod=true only on refs/heads/main."
-          echo "Phase 6 will upload/promote signed AAB to Play Production after approval."
-          echo "Build artifact from this run: ${{ needs.android-build.outputs.artifact_name }}"
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.android-build.outputs.artifact_name }}
+          path: android-out
+
+      - name: Upload to Google Play Production
+        uses: r0adkll/upload-google-play-action@v1
+        with:
+          serviceAccountJson: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
+          packageName: ${{ inputs.package_name }}
+          releaseFiles: ${{ github.workspace }}/android-out/*.aab
+          track: production
+          status: completed

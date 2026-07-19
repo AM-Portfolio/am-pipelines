@@ -98,5 +98,18 @@ jobs:
           fi
           echo "✅ $dep is healthy in ${{ inputs.environment }}"
 
+          # Optional companion worker (universal-chart companionWorker.enabled)
+          worker="${dep}-worker"
+          if kubectl get deployment/"$worker" -n "$ns" >/dev/null 2>&1; then
+            echo "⏳ Waiting for companion worker rollout: $worker ..."
+            if ! kubectl rollout status deployment/"$worker" -n "$ns" --timeout=10m; then
+              echo "❌ Rollout FAILED for $worker"
+              kubectl get pods -n "$ns"
+              kubectl get events -n "$ns" --sort-by='.lastTimestamp' | tail -n 20
+              exit 1
+            fi
+            echo "✅ $worker is healthy in ${{ inputs.environment }}"
+          fi
+
 
 # comment

@@ -53,3 +53,18 @@ ingress:
         - path: /
           pathType: ImplementationSpecific
   tls: []
+
+# Optional companion worker (same image, different entrypoint).
+# Used by support-agent gateway + Temporal worker. Disabled by default.
+companionWorker:
+  enabled: false
+  replicaCount: 1
+  nameSuffix: worker
+  entrypoint: ""
+  # Leave port at 0 to skip containerPort and HTTP probes (Temporal workers).
+  port: 0
+  env: {}
+  resources: {}
+  httpProbes: false
+  probes: {}
+  podAnnotations: {}

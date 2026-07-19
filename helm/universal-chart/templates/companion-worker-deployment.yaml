@@ -1,0 +1,134 @@
+{{- if and .Values.companionWorker .Values.companionWorker.enabled }}
+{{- $cw := .Values.companionWorker }}
+{{- $fullname := include "universal-chart.fullname" . }}
+{{- $suffix := default "worker" $cw.nameSuffix }}
+{{- $vaultEnabled := or .Values.global.vault.enabled (and .Values.vault .Values.vault.enabled | default false) }}
+{{- $vaultSecrets := merge (default (dict) .Values.global.vault.secrets) (and .Values.vault .Values.vault.secretPaths | default (dict)) }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-{{ $suffix }}
+  labels:
+    {{- include "universal-chart.labels" . | nindent 4 }}
+    app.kubernetes.io/component: {{ $suffix }}
+spec:
+  replicas: {{ default 1 $cw.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "universal-chart.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: {{ $suffix }}
+  template:
+    metadata:
+      labels:
+        {{- include "universal-chart.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: {{ $suffix }}
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with $cw.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if $vaultEnabled }}
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/agent-init-first: "true"
+        vault.hashicorp.com/role: {{ and .Values.vault .Values.vault.role | default .Values.global.vault.role | default (printf "am-%s-role" $fullname) | quote }}
+        vault.hashicorp.com/auth-path: {{ and .Values.vault .Values.vault.authPath | default .Values.global.vault.authPath | default "auth/kubernetes" | quote }}
+        vault.hashicorp.com/agent-pre-populate-only: "false"
+        {{- range $k, $v := $vaultSecrets }}
+        vault.hashicorp.com/agent-inject-secret-{{ $k }}: {{ if kindIs "string" $v }}{{ $v | quote }}{{ else }}{{ $v.path | quote }}{{ end }}
+        vault.hashicorp.com/agent-inject-template-{{ $k }}: |
+          {{`{{- with secret `}} {{ if kindIs "string" $v }}{{ $v | quote }}{{ else }}{{ $v.path | quote }}{{ end }} {{` -}}` }}
+          {{- if and (not (kindIs "string" $v)) $v.mappings }}
+          {{- range $moduleVar, $vaultKey := $v.mappings }}
+          {{- if eq $vaultKey "__jaas__" }}
+          {{`export `}}{{ $moduleVar }}{{`="org.apache.kafka.common.security.scram.ScramLoginModule required username=\"{{ .Data.data.username }}\" password=\"{{ .Data.data.password }}\";"`}}
+          {{- else }}
+          {{`{{- with index .Data.data `}}{{ $vaultKey | quote }}{{` }}` }}
+          {{`export `}}{{ $moduleVar }}="{{`{{ . }}`}}"
+          {{`{{ end }}` }}
+          {{- end }}
+          {{- end }}
+          {{- else }}
+          {{`{{- range $sk, $sv := .Data.data }}`}}
+          {{`export `}}{{`{{ $sk | toUpper }}`}}="{{`{{ $sv }}`}}"
+          {{`{{- end }}`}}
+          {{- end }}
+          {{`{{- end }}`}}
+        {{- end }}
+        {{- end }}
+    spec:
+      {{- with .Values.global.image.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $vaultEnabled }}
+      serviceAccountName: {{ and .Values.vault .Values.vault.serviceAccountName | default .Values.global.vault.serviceAccountName | default (printf "%s-vault-sa" $fullname) }}
+      {{- end }}
+      automountServiceAccountToken: {{ if $vaultEnabled }}true{{ else }}{{ .Values.security.automountServiceAccountToken | default false }}{{ end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: {{ $fullname }}-{{ $suffix }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: {{ .Values.security.readOnlyRootFilesystem | default false }}
+            capabilities:
+              drop:
+                - ALL
+          image: "{{ .Values.global.image.registry }}/{{ .Values.image.repository }}:{{ .Values.global.image.tag }}"
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          {{- if and $cw.port (gt (int $cw.port) 0) }}
+          ports:
+            - containerPort: {{ $cw.port }}
+          {{- end }}
+          {{- if or $vaultEnabled $cw.entrypoint }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              {{- if $vaultEnabled }}
+              {{- range $k, $v := $vaultSecrets }}
+              . /vault/secrets/{{ $k }} 2>/dev/null || true
+              {{- end }}
+              {{- end }}
+              {{ default "exec sleep infinity" $cw.entrypoint }}
+          {{- end }}
+          env:
+            - name: ENVIRONMENT
+              value: {{ .Values.environment | quote }}
+            {{- if .Values.env }}
+            {{- range $k, $v := .Values.env }}
+            - name: {{ $k | quote }}
+              value: {{ $v | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if $cw.env }}
+            {{- range $k, $v := $cw.env }}
+            - name: {{ $k | quote }}
+              value: {{ $v | quote }}
+            {{- end }}
+            {{- end }}
+          {{- if $cw.resources }}
+          resources:
+            {{- toYaml $cw.resources | nindent 12 }}
+          {{- else if .Values.resources }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- end }}
+          {{- if and $cw.httpProbes (and $cw.port (gt (int $cw.port) 0)) }}
+          livenessProbe:
+            httpGet:
+              path: {{ if and $cw.probes $cw.probes.liveness }}{{ $cw.probes.liveness.path | default "/health" }}{{ else }}"/health"{{ end }}
+              port: {{ $cw.port }}
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: {{ if and $cw.probes $cw.probes.readiness }}{{ $cw.probes.readiness.path | default "/health" }}{{ else }}"/health"{{ end }}
+              port: {{ $cw.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          {{- end }}
+{{- end }}

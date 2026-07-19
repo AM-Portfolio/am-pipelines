@@ -55,6 +55,11 @@ on:
         type: boolean
         default: true
         description: "Set to true to enable the preprod deployment stage"
+      skip_security_scan:
+        required: false
+        type: boolean
+        default: false
+        description: "Skip internal security scans (set true when caller already ran a shared security gate)"
 
 jobs:
   # ============================================================
@@ -63,6 +68,8 @@ jobs:
   # ============================================================
   security-scan:
     name: Security Scan (Secrets)
+    # Skip when caller already ran a shared security gate (e.g. unified-ci.yml)
+    if: ${{ !inputs.skip_security_scan }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -84,7 +91,8 @@ jobs:
   # ============================================================
   misconfig-scan:
     name: Security Scan (IaC)
-
+    # Skip when caller already ran a shared security gate (e.g. unified-ci.yml)
+    if: ${{ !inputs.skip_security_scan }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -109,7 +117,12 @@ jobs:
   # ============================================================
   build:
     name: Build & Push
-    needs: security-scan
+    needs: [security-scan, misconfig-scan]
+    # Run when security jobs succeeded OR were intentionally skipped by caller
+    if: |
+      always() &&
+      (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped') &&
+      (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -290,8 +303,15 @@ jobs:
   deploy-dev:
     name: Deploy → Dev
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
+    # Proceed when security jobs succeeded OR were intentionally skipped by caller
+    if: |
+      always() &&
+      inputs.image_name != '' && inputs.deploy_dev == true &&
+      needs.build.result == 'success' &&
+      needs.vulnerability-scan.result == 'success' &&
+      (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
+      (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
     runs-on: [self-hosted, linux, x64, docker]
-    if: ${{ inputs.image_name != '' && inputs.deploy_dev == true }}
     environment: dev-${{ inputs.image_name }} # Tracking only (no approval by default)
     permissions:
       contents: read
@@ -378,7 +398,14 @@ jobs:
     name: Deploy → Preprod
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
     runs-on: [self-hosted, linux, x64, docker]
-    if: ${{ inputs.image_name != '' && inputs.deploy_preprod == true }}
+    # Proceed when security jobs succeeded OR were intentionally skipped by caller
+    if: |
+      always() &&
+      inputs.image_name != '' && inputs.deploy_preprod == true &&
+      needs.build.result == 'success' &&
+      needs.vulnerability-scan.result == 'success' &&
+      (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
+      (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
     environment: preprod-${{ inputs.image_name }} # ⏸ Pauses for preprod approval
     permissions:
       contents: read
@@ -464,7 +491,14 @@ jobs:
     name: Deploy → Prod
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
     runs-on: [self-hosted, linux, x64, docker]
-    if: ${{ inputs.image_name != '' && inputs.deploy_prod == true }}
+    # Proceed when security jobs succeeded OR were intentionally skipped by caller
+    if: |
+      always() &&
+      inputs.image_name != '' && inputs.deploy_prod == true &&
+      needs.build.result == 'success' &&
+      needs.vulnerability-scan.result == 'success' &&
+      (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
+      (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
     environment: prod-${{ inputs.image_name }} # ⏸ Pauses for prod approval
     permissions:
       contents: read

@@ -274,6 +274,10 @@ jobs:
     name: Security Scan (Vulnerabilities)
     needs: build
     runs-on: ubuntu-latest
+    if: |
+      always() &&
+      needs.build.result == 'success' &&
+      !inputs.skip_security_scan
     permissions:
       contents: read
       packages: read
@@ -308,7 +312,7 @@ jobs:
       always() &&
       inputs.image_name != '' && inputs.deploy_dev == true &&
       needs.build.result == 'success' &&
-      needs.vulnerability-scan.result == 'success' &&
+      (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
       (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
       (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
     runs-on: [self-hosted, linux, x64, docker]
@@ -403,7 +407,7 @@ jobs:
       always() &&
       inputs.image_name != '' && inputs.deploy_preprod == true &&
       needs.build.result == 'success' &&
-      needs.vulnerability-scan.result == 'success' &&
+      (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
       (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
       (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
     environment: preprod-${{ inputs.image_name }} # ⏸ Pauses for preprod approval
@@ -496,7 +500,7 @@ jobs:
       always() &&
       inputs.image_name != '' && inputs.deploy_prod == true &&
       needs.build.result == 'success' &&
-      needs.vulnerability-scan.result == 'success' &&
+      (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
       (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
       (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
     environment: prod-${{ inputs.image_name }} # ⏸ Pauses for prod approval

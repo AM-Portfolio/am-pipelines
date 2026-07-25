@@ -65,6 +65,18 @@ on:
         required: false
         type: string
         default: ""
+      gh_env_dev:
+        required: false
+        type: string
+        description: "Explicit GitHub environment name for dev deployment approval"
+      gh_env_preprod:
+        required: false
+        type: string
+        description: "Explicit GitHub environment name for preprod deployment approval"
+      gh_env_prod:
+        required: false
+        type: string
+        description: "Explicit GitHub environment name for prod deployment approval"
     secrets:
       ANDROID_KEYSTORE_BASE64:
         required: false
@@ -240,7 +252,7 @@ jobs:
     needs: android-build
     if: ${{ inputs.deploy_dev }}
     runs-on: ubuntu-latest
-    environment: dev-am-modern-ui-android
+    environment: ${{ inputs.gh_env_dev || format('dev-{0}-android', inputs.package_name || 'app') }}
     permissions:
       contents: read
     steps:
@@ -271,7 +283,7 @@ jobs:
     needs: android-build
     if: ${{ inputs.deploy_preprod }}
     runs-on: ubuntu-latest
-    environment: preprod-am-modern-ui-android
+    environment: ${{ inputs.gh_env_preprod || format('preprod-{0}-android', inputs.package_name || 'app') }}
     permissions:
       contents: read
     steps:
@@ -298,7 +310,7 @@ jobs:
     needs: android-build
     if: ${{ inputs.deploy_prod }}
     runs-on: ubuntu-latest
-    environment: prod-am-modern-ui-android
+    environment: ${{ inputs.gh_env_prod || format('prod-{0}-android', inputs.package_name || 'app') }}
     permissions:
       contents: read
     steps:

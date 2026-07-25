@@ -87,6 +87,11 @@ on:
         required: false
         type: string
         description: "Explicit GitHub environment name for prod deployment approval"
+      no_cache:
+        required: false
+        type: boolean
+        default: false
+        description: "Force Docker to build without using cache"
 
 jobs:
   # ============================================================
@@ -280,7 +285,12 @@ jobs:
           BASE_REG=$(echo $BASE_REG | tr '[A-Z]' '[a-z]')
 
           echo "Building $IMAGE_ID ..."
-          docker build -f Dockerfile \
+          CACHE_ARG=""
+          if [ "${{ inputs.no_cache }}" = "true" ]; then
+            CACHE_ARG="--no-cache"
+          fi
+
+          docker build $CACHE_ARG -f Dockerfile \
             --build-arg BASE_REGISTRY=$BASE_REG \
             --build-arg GITHUB_PACKAGES_USERNAME=${{ github.actor }} \
             --build-arg GITHUB_PACKAGES_TOKEN=${GHCR_TOKEN} \

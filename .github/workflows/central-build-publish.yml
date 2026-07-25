@@ -60,6 +60,33 @@ on:
         type: boolean
         default: false
         description: "Skip internal security scans (set true when caller already ran a shared security gate)"
+      skip_secrets_scan:
+        required: false
+        type: boolean
+        default: false
+        description: "Skip internal secrets scan (TruffleHog)"
+      skip_iac_scan:
+        required: false
+        type: boolean
+        default: false
+        description: "Skip internal IaC configuration scan (Checkov)"
+      skip_vulnerability_scan:
+        required: false
+        type: boolean
+        default: false
+        description: "Skip internal Docker image vulnerability scan (Trivy)"
+      gh_env_dev:
+        required: false
+        type: string
+        description: "Explicit GitHub environment name for dev deployment approval"
+      gh_env_preprod:
+        required: false
+        type: string
+        description: "Explicit GitHub environment name for preprod deployment approval"
+      gh_env_prod:
+        required: false
+        type: string
+        description: "Explicit GitHub environment name for prod deployment approval"
 
 jobs:
   # ============================================================
@@ -69,7 +96,7 @@ jobs:
   security-scan:
     name: Security Scan (Secrets)
     # Skip when caller already ran a shared security gate (e.g. unified-ci.yml)
-    if: ${{ !inputs.skip_security_scan }}
+    if: ${{ !inputs.skip_security_scan && !inputs.skip_secrets_scan }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -92,7 +119,7 @@ jobs:
   misconfig-scan:
     name: Security Scan (IaC)
     # Skip when caller already ran a shared security gate (e.g. unified-ci.yml)
-    if: ${{ !inputs.skip_security_scan }}
+    if: ${{ !inputs.skip_security_scan && !inputs.skip_iac_scan }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -277,7 +304,8 @@ jobs:
     if: |
       always() &&
       needs.build.result == 'success' &&
-      !inputs.skip_security_scan
+      !inputs.skip_security_scan &&
+      !inputs.skip_vulnerability_scan
     permissions:
       contents: read
       packages: read
@@ -316,7 +344,7 @@ jobs:
       (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
       (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
     runs-on: [self-hosted, linux, x64, docker]
-    environment: dev-${{ inputs.image_name }} # Tracking only (no approval by default)
+    environment: ${{ inputs.gh_env_dev || format('dev-{0}', inputs.image_name) }}
     permissions:
       contents: read
       packages: write
@@ -329,9 +357,11 @@ jobs:
 
       - name: Validate Helm Configuration
         shell: bash
+        env:
+          INPUT_WORKING_DIRECTORY: ${{ inputs.working_directory }}
         run: |
-          if [ ! -f "${{ inputs.working_directory }}/helm/values.yaml" ]; then
-            echo "❌ REQUIRED file missing: ${{ inputs.working_directory }}/helm/values.yaml"
+          if [ ! -f "$INPUT_WORKING_DIRECTORY/helm/values.yaml" ]; then
+            echo "❌ REQUIRED file missing: $INPUT_WORKING_DIRECTORY/helm/values.yaml"
             echo "Deployment cannot proceed without a base values file."
             exit 1
           fi
@@ -347,42 +377,51 @@ jobs:
 
       - name: Deploy to Dev via Helm
         shell: bash
+        env:
+          INPUT_WORKING_DIRECTORY: ${{ inputs.working_directory }}
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+          INPUT_DEV_NAMESPACE: ${{ inputs.dev_namespace }}
+          INPUT_REGISTRY: ${{ inputs.registry }}
+          INPUT_LANGUAGE: ${{ inputs.language }}
+          REPO_OWNER_RAW: ${{ github.repository_owner }}
+          RUN_ID: ${{ github.run_id }}
         run: |
-          BASE_VALUES="${{ inputs.working_directory }}/helm/values.yaml"
-          MAPPING_VALUES="${{ inputs.working_directory }}/helm/vault-mappings.yaml"
-          ENV_VALUES="${{ inputs.working_directory }}/helm/values.dev.yaml" # Optional dev overrides
+          BASE_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.yaml"
+          MAPPING_VALUES="$INPUT_WORKING_DIRECTORY/helm/vault-mappings.yaml"
+          ENV_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.dev.yaml"
 
-          VALUES_ARG=""
+          VALUES_ARG=()
           if [ -f "$BASE_VALUES" ]; then
-            VALUES_ARG="-f \"$BASE_VALUES\""
+            VALUES_ARG+=("-f" "$BASE_VALUES")
           fi
           if [ -f "$MAPPING_VALUES" ]; then
-            VALUES_ARG="$VALUES_ARG -f \"$MAPPING_VALUES\""
+            VALUES_ARG+=("-f" "$MAPPING_VALUES")
           fi
           if [ -f "$ENV_VALUES" ]; then
-            VALUES_ARG="$VALUES_ARG -f \"$ENV_VALUES\""
+            VALUES_ARG+=("-f" "$ENV_VALUES")
           fi
 
-          echo "🚀 [DEV] Deploying ${{ inputs.image_name }} → ${{ inputs.dev_namespace }}"
+          echo "🚀 [DEV] Deploying $INPUT_IMAGE_NAME → $INPUT_DEV_NAMESPACE"
 
-          REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          REPO_OWNER=$(echo "$REPO_OWNER_RAW" | tr '[:upper:]' '[:lower:]')
 
-          CMD="helm upgrade --install ${{ inputs.image_name }} ./am-pipelines-repo/helm/universal-chart \
-            --namespace ${{ inputs.dev_namespace }} \
+          helm upgrade --install "$INPUT_IMAGE_NAME" ./am-pipelines-repo/helm/universal-chart \
+            --namespace "$INPUT_DEV_NAMESPACE" \
             --create-namespace \
-            --set global.image.registry=\"${{ inputs.registry }}/$REPO_OWNER\" \
-            --set global.image.tag=\"${{ github.run_id }}\" \
-            --set global.image.pullPolicy=\"Always\" \
-            --set language=${{ inputs.language }} \
-            $VALUES_ARG"
-            
-          eval "$CMD"
+            --set global.image.registry="$INPUT_REGISTRY/$REPO_OWNER" \
+            --set global.image.tag="$RUN_ID" \
+            --set global.image.pullPolicy="Always" \
+            --set language="$INPUT_LANGUAGE" \
+            "${VALUES_ARG[@]}"
 
       - name: Verify Dev Rollout
         shell: bash
+        env:
+          INPUT_DEV_NAMESPACE: ${{ inputs.dev_namespace }}
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
         run: |
-          ns="${{ inputs.dev_namespace }}"
-          dep="${{ inputs.image_name }}"
+          ns="$INPUT_DEV_NAMESPACE"
+          dep="$INPUT_IMAGE_NAME"
           echo "⏳ Waiting for rollout: $dep in $ns ..."
 
           if ! kubectl rollout status deployment/$dep -n $ns --timeout=10m; then
@@ -410,7 +449,7 @@ jobs:
       (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
       (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
       (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
-    environment: preprod-${{ inputs.image_name }} # ⏸ Pauses for preprod approval
+    environment: ${{ inputs.gh_env_preprod || format('preprod-{0}', inputs.image_name) }}
     permissions:
       contents: read
       packages: write
@@ -432,42 +471,51 @@ jobs:
 
       - name: Deploy to Preprod via Helm
         shell: bash
+        env:
+          INPUT_WORKING_DIRECTORY: ${{ inputs.working_directory }}
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+          INPUT_PREPROD_NAMESPACE: ${{ inputs.preprod_namespace }}
+          INPUT_REGISTRY: ${{ inputs.registry }}
+          INPUT_LANGUAGE: ${{ inputs.language }}
+          REPO_OWNER_RAW: ${{ github.repository_owner }}
+          RUN_ID: ${{ github.run_id }}
         run: |
-          BASE_VALUES="${{ inputs.working_directory }}/helm/values.yaml"
-          MAPPING_VALUES="${{ inputs.working_directory }}/helm/vault-mappings.yaml"
-          ENV_VALUES="${{ inputs.working_directory }}/helm/values.preprod.yaml"
+          BASE_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.yaml"
+          MAPPING_VALUES="$INPUT_WORKING_DIRECTORY/helm/vault-mappings.yaml"
+          ENV_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.preprod.yaml"
 
-          VALUES_ARG=""
+          VALUES_ARG=()
           if [ -f "$BASE_VALUES" ]; then
-            VALUES_ARG="-f \"$BASE_VALUES\""
+            VALUES_ARG+=("-f" "$BASE_VALUES")
           fi
           if [ -f "$MAPPING_VALUES" ]; then
-            VALUES_ARG="$VALUES_ARG -f \"$MAPPING_VALUES\""
+            VALUES_ARG+=("-f" "$MAPPING_VALUES")
           fi
           if [ -f "$ENV_VALUES" ]; then
-            VALUES_ARG="$VALUES_ARG -f \"$ENV_VALUES\""
+            VALUES_ARG+=("-f" "$ENV_VALUES")
           fi
 
-          echo "🚀 [PREPROD] Deploying ${{ inputs.image_name }} → ${{ inputs.preprod_namespace }}"
+          echo "🚀 [PREPROD] Deploying $INPUT_IMAGE_NAME → $INPUT_PREPROD_NAMESPACE"
 
-          REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          REPO_OWNER=$(echo "$REPO_OWNER_RAW" | tr '[:upper:]' '[:lower:]')
 
-          CMD="helm upgrade --install ${{ inputs.image_name }} ./am-pipelines-repo/helm/universal-chart \
-            --namespace ${{ inputs.preprod_namespace }} \
+          helm upgrade --install "$INPUT_IMAGE_NAME" ./am-pipelines-repo/helm/universal-chart \
+            --namespace "$INPUT_PREPROD_NAMESPACE" \
             --create-namespace \
-            --set global.image.registry=\"${{ inputs.registry }}/$REPO_OWNER\" \
-            --set global.image.tag=\"${{ github.run_id }}\" \
-            --set global.image.pullPolicy=\"Always\" \
-            --set language=${{ inputs.language }} \
-            $VALUES_ARG"
-            
-          eval "$CMD"
+            --set global.image.registry="$INPUT_REGISTRY/$REPO_OWNER" \
+            --set global.image.tag="$RUN_ID" \
+            --set global.image.pullPolicy="Always" \
+            --set language="$INPUT_LANGUAGE" \
+            "${VALUES_ARG[@]}"
 
       - name: Verify Preprod Rollout
         shell: bash
+        env:
+          INPUT_PREPROD_NAMESPACE: ${{ inputs.preprod_namespace }}
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
         run: |
-          ns="${{ inputs.preprod_namespace }}"
-          dep="${{ inputs.image_name }}"
+          ns="$INPUT_PREPROD_NAMESPACE"
+          dep="$INPUT_IMAGE_NAME"
           echo "⏳ Waiting for rollout: $dep in $ns ..."
 
           if ! kubectl rollout status deployment/$dep -n $ns --timeout=10m; then
@@ -481,10 +529,13 @@ jobs:
       - name: Diagnostics on Failure
         if: failure()
         shell: bash
+        env:
+          INPUT_PREPROD_NAMESPACE: ${{ inputs.preprod_namespace }}
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
         run: |
           echo "🔍 Preprod deployment failed. Diagnostics:"
-          kubectl get pods -n ${{ inputs.preprod_namespace }} -o wide
-          kubectl describe deployment/${{ inputs.image_name }} -n ${{ inputs.preprod_namespace }} 2>&1 | tail -n 30
+          kubectl get pods -n "$INPUT_PREPROD_NAMESPACE" -o wide
+          kubectl describe deployment/"$INPUT_IMAGE_NAME" -n "$INPUT_PREPROD_NAMESPACE" 2>&1 | tail -n 30
 
   # ============================================================
   # DEPLOY — PROD
@@ -503,7 +554,7 @@ jobs:
       (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
       (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
       (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
-    environment: prod-${{ inputs.image_name }} # ⏸ Pauses for prod approval
+    environment: ${{ inputs.gh_env_prod || format('prod-{0}', inputs.image_name) }}
     permissions:
       contents: read
       packages: write
@@ -525,42 +576,51 @@ jobs:
 
       - name: Deploy to Prod via Helm
         shell: bash
+        env:
+          INPUT_WORKING_DIRECTORY: ${{ inputs.working_directory }}
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+          INPUT_PROD_NAMESPACE: ${{ inputs.prod_namespace }}
+          INPUT_REGISTRY: ${{ inputs.registry }}
+          INPUT_LANGUAGE: ${{ inputs.language }}
+          REPO_OWNER_RAW: ${{ github.repository_owner }}
+          RUN_ID: ${{ github.run_id }}
         run: |
-          BASE_VALUES="${{ inputs.working_directory }}/helm/values.yaml"
-          MAPPING_VALUES="${{ inputs.working_directory }}/helm/vault-mappings.yaml"
-          ENV_VALUES="${{ inputs.working_directory }}/helm/values.prod.yaml"
+          BASE_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.yaml"
+          MAPPING_VALUES="$INPUT_WORKING_DIRECTORY/helm/vault-mappings.yaml"
+          ENV_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.prod.yaml"
 
-          VALUES_ARG=""
+          VALUES_ARG=()
           if [ -f "$BASE_VALUES" ]; then
-            VALUES_ARG="-f \"$BASE_VALUES\""
+            VALUES_ARG+=("-f" "$BASE_VALUES")
           fi
           if [ -f "$MAPPING_VALUES" ]; then
-            VALUES_ARG="$VALUES_ARG -f \"$MAPPING_VALUES\""
+            VALUES_ARG+=("-f" "$MAPPING_VALUES")
           fi
           if [ -f "$ENV_VALUES" ]; then
-            VALUES_ARG="$VALUES_ARG -f \"$ENV_VALUES\""
+            VALUES_ARG+=("-f" "$ENV_VALUES")
           fi
 
-          echo "🚀 [PROD] Deploying ${{ inputs.image_name }} → ${{ inputs.prod_namespace }}"
+          echo "🚀 [PROD] Deploying $INPUT_IMAGE_NAME → $INPUT_PROD_NAMESPACE"
 
-          REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          REPO_OWNER=$(echo "$REPO_OWNER_RAW" | tr '[:upper:]' '[:lower:]')
 
-          CMD="helm upgrade --install ${{ inputs.image_name }} ./am-pipelines-repo/helm/universal-chart \
-            --namespace ${{ inputs.prod_namespace }} \
+          helm upgrade --install "$INPUT_IMAGE_NAME" ./am-pipelines-repo/helm/universal-chart \
+            --namespace "$INPUT_PROD_NAMESPACE" \
             --create-namespace \
-            --set global.image.registry=\"${{ inputs.registry }}/$REPO_OWNER\" \
-            --set global.image.tag=\"${{ github.run_id }}\" \
-            --set global.image.pullPolicy=\"Always\" \
-            --set language=${{ inputs.language }} \
-            $VALUES_ARG"
-            
-          eval "$CMD"
+            --set global.image.registry="$INPUT_REGISTRY/$REPO_OWNER" \
+            --set global.image.tag="$RUN_ID" \
+            --set global.image.pullPolicy="Always" \
+            --set language="$INPUT_LANGUAGE" \
+            "${VALUES_ARG[@]}"
 
       - name: Verify Prod Rollout
         shell: bash
+        env:
+          INPUT_PROD_NAMESPACE: ${{ inputs.prod_namespace }}
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
         run: |
-          ns="${{ inputs.prod_namespace }}"
-          dep="${{ inputs.image_name }}"
+          ns="$INPUT_PROD_NAMESPACE"
+          dep="$INPUT_IMAGE_NAME"
           echo "⏳ Waiting for rollout: $dep in $ns ..."
 
           if ! kubectl rollout status deployment/$dep -n $ns --timeout=10m; then
@@ -574,7 +634,10 @@ jobs:
       - name: Diagnostics on Failure
         if: failure()
         shell: bash
+        env:
+          INPUT_PROD_NAMESPACE: ${{ inputs.prod_namespace }}
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
         run: |
           echo "🔍 Prod deployment failed. Diagnostics:"
-          kubectl get pods -n ${{ inputs.prod_namespace }} -o wide
-          kubectl describe deployment/${{ inputs.image_name }} -n ${{ inputs.prod_namespace }} 2>&1 | tail -n 30
+          kubectl get pods -n "$INPUT_PROD_NAMESPACE" -o wide
+          kubectl describe deployment/"$INPUT_IMAGE_NAME" -n "$INPUT_PROD_NAMESPACE" 2>&1 | tail -n 30

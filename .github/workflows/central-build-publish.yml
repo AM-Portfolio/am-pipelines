@@ -92,6 +92,21 @@ on:
         type: boolean
         default: false
         description: "Force Docker to build without using cache"
+      dev_runner_labels:
+        required: false
+        type: string
+        default: '["self-hosted", "linux", "x64", "docker"]'
+        description: "JSON array of labels for the dev runner"
+      preprod_runner_labels:
+        required: false
+        type: string
+        default: '["self-hosted", "linux", "x64", "docker"]'
+        description: "JSON array of labels for the preprod runner"
+      prod_runner_labels:
+        required: false
+        type: string
+        default: '["self-hosted", "linux", "x64", "docker"]'
+        description: "JSON array of labels for the prod runner"
 
 jobs:
   # ============================================================
@@ -353,7 +368,7 @@ jobs:
       (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
       (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
       (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
-    runs-on: [self-hosted, linux, x64, docker]
+    runs-on: ${{ fromJSON(inputs.dev_runner_labels) }}
     environment: ${{ inputs.gh_env_dev || format('dev-{0}', inputs.image_name) }}
     permissions:
       contents: read
@@ -450,7 +465,7 @@ jobs:
   deploy-preprod:
     name: Deploy → Preprod
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
-    runs-on: [self-hosted, linux, x64, docker]
+    runs-on: ${{ fromJSON(inputs.preprod_runner_labels) }}
     # Proceed when security jobs succeeded OR were intentionally skipped by caller
     if: |
       always() &&
@@ -555,7 +570,7 @@ jobs:
   deploy-prod:
     name: Deploy → Prod
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
-    runs-on: [self-hosted, linux, x64, docker]
+    runs-on: ${{ fromJSON(inputs.prod_runner_labels) }}
     # Proceed when security jobs succeeded OR were intentionally skipped by caller
     if: |
       always() &&

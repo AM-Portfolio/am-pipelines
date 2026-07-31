@@ -10,6 +10,8 @@ global:
     authPath: auth/kubernetes
     serviceAccountName: "am-backend-sa" # Standardized backend SA
     secrets: {}
+    csi:
+      enabled: false
 
 environment: default
 replicaCount: 1

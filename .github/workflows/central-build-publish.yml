@@ -208,15 +208,32 @@ jobs:
 
       - name: Build Java Package
         if: ${{ inputs.language == 'java' }}
+        working-directory: ${{ github.workspace }}
         env:
           GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
-        run: mvn clean package -DskipTests
+        run: |
+          MODULE="${{ inputs.working_directory }}"
+          ROOT_POM="${{ github.workspace }}/pom.xml"
+          if [ -f "$ROOT_POM" ] && [ "$MODULE" != "." ] && grep -Fq "<module>${MODULE}</module>" "$ROOT_POM"; then
+            echo "Monorepo reactor build: -pl ${MODULE} -am"
+            mvn -B -f "$ROOT_POM" clean package -pl "$MODULE" -am -DskipTests
+          else
+            mvn -B -f "${{ github.workspace }}/${MODULE}/pom.xml" clean package -DskipTests
+          fi
 
       - name: Run Java Tests
         if: ${{ inputs.language == 'java' }}
+        working-directory: ${{ github.workspace }}
         env:
           GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
-        run: mvn test || echo "Test step failed or skipped"
+        run: |
+          MODULE="${{ inputs.working_directory }}"
+          ROOT_POM="${{ github.workspace }}/pom.xml"
+          if [ -f "$ROOT_POM" ] && [ "$MODULE" != "." ] && grep -Fq "<module>${MODULE}</module>" "$ROOT_POM"; then
+            mvn -B -f "$ROOT_POM" test -pl "$MODULE" -am || echo "Test step failed or skipped"
+          else
+            mvn -B -f "${{ github.workspace }}/${MODULE}/pom.xml" test || echo "Test step failed or skipped"
+          fi
 
       # ── Python ────────────────────────────────────────────
       - name: Set up Python

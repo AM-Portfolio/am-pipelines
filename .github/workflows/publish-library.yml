@@ -5,7 +5,8 @@ name: Publish Library
 #   action: publish (deploy/release) | verify (build/test only, no registry push)
 #   use_release_version: request -SNAPSHOT strip (honored only on refs/heads/main or refs/heads/master)
 #
-# java   → mvn deploy → GitHub Packages (github / github-core / github-investment ids)
+# java   → mvn deploy → GitHub Packages (github / github-core / github-investment / github-trade)
+#         Maven auth: username x-access-token + GHCR_TOKEN|GITHUB_PACKAGES_TOKEN|GITHUB_TOKEN
 # python → wheel/sdist → GitHub Release
 # flutter → analyze/test → zip → GitHub Release (skipped when pubspec has publish_to: none)
 
@@ -151,22 +152,22 @@ jobs:
             <servers>
               <server>
                 <id>github</id>
-                <username>${env.GITHUB_ACTOR}</username>
+                <username>x-access-token</username>
                 <password>${env.GITHUB_TOKEN}</password>
               </server>
               <server>
                 <id>github-investment</id>
-                <username>${env.GITHUB_ACTOR}</username>
+                <username>x-access-token</username>
                 <password>${env.GITHUB_TOKEN}</password>
               </server>
               <server>
                 <id>github-trade</id>
-                <username>${env.GITHUB_ACTOR}</username>
+                <username>x-access-token</username>
                 <password>${env.GITHUB_TOKEN}</password>
               </server>
               <server>
                 <id>github-core</id>
-                <username>${env.GITHUB_ACTOR}</username>
+                <username>x-access-token</username>
                 <password>${env.GITHUB_TOKEN}</password>
               </server>
             </servers>
@@ -263,7 +264,6 @@ jobs:
         if: inputs.language == 'java' && inputs.action == 'verify'
         env:
           GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
-          GITHUB_ACTOR: ${{ github.actor }}
         run: |
           ROOT_POM="${{ github.workspace }}/pom.xml"
           MODULE_DIR="${{ inputs.working_directory }}"
@@ -278,7 +278,6 @@ jobs:
         if: inputs.language == 'java' && inputs.action == 'publish'
         env:
           GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
-          GITHUB_ACTOR: ${{ github.actor }}
         run: |
           ROOT_POM="${{ github.workspace }}/pom.xml"
           MODULE_DIR="${{ inputs.working_directory }}"

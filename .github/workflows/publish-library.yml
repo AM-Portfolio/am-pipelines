@@ -269,7 +269,7 @@ jobs:
           MODULE_DIR="${{ inputs.working_directory }}"
           MODULE_POM="${{ github.workspace }}/${MODULE_DIR}/pom.xml"
           if [ -f "$ROOT_POM" ] && [ "$MODULE_DIR" != "." ] && [ "$MODULE_DIR" != "./" ] && grep -Fq "<module>${MODULE_DIR}</module>" "$ROOT_POM"; then
-            mvn -B -f "$ROOT_POM" clean verify -pl "$MODULE_DIR" -DskipTests
+            mvn -B -f "$ROOT_POM" clean verify -pl "$MODULE_DIR" -am -DskipTests
           else
             mvn -B -f "$MODULE_POM" clean verify -DskipTests
           fi
@@ -283,7 +283,8 @@ jobs:
           MODULE_DIR="${{ inputs.working_directory }}"
           MODULE_POM="${{ github.workspace }}/${MODULE_DIR}/pom.xml"
           if [ -f "$ROOT_POM" ] && [ "$MODULE_DIR" != "." ] && [ "$MODULE_DIR" != "./" ] && grep -Fq "<module>${MODULE_DIR}</module>" "$ROOT_POM"; then
-            MVN_DEPLOY=(mvn -B -f "$ROOT_POM" clean deploy -pl "$MODULE_DIR" -DskipTests)
+            # -am builds/publishes reactor deps (e.g. am-trade-domain) that are not in Packages yet
+            MVN_DEPLOY=(mvn -B -f "$ROOT_POM" clean deploy -pl "$MODULE_DIR" -am -DskipTests)
           else
             MVN_DEPLOY=(mvn -B -f "$MODULE_POM" clean deploy -DskipTests)
           fi

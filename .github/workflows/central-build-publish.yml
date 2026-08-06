@@ -465,7 +465,7 @@ jobs:
   deploy-preprod:
     name: Deploy → Preprod
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.preprod_runner_labels) }}
     # Proceed when security jobs succeeded OR were intentionally skipped by caller
     if: |
       always() &&

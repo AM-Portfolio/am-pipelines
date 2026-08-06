@@ -107,6 +107,11 @@ on:
         type: string
         default: '["self-hosted", "linux", "x64", "docker"]'
         description: "JSON array of labels for the prod runner"
+      scan_runner_labels:
+        required: false
+        type: string
+        default: '["self-hosted", "linux", "x64", "docker"]'
+        description: "JSON array of labels for the scanning and build runner"
 
 jobs:
   # ============================================================
@@ -117,7 +122,7 @@ jobs:
     name: Security Scan (Secrets)
     # Skip when caller already ran a shared security gate (e.g. unified-ci.yml)
     if: ${{ !inputs.skip_security_scan && !inputs.skip_secrets_scan }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.scan_runner_labels) }}
     permissions:
       contents: read
     steps:
@@ -140,7 +145,7 @@ jobs:
     name: Security Scan (IaC)
     # Skip when caller already ran a shared security gate (e.g. unified-ci.yml)
     if: ${{ !inputs.skip_security_scan && !inputs.skip_iac_scan }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.scan_runner_labels) }}
     permissions:
       contents: read
     steps:
@@ -170,7 +175,7 @@ jobs:
       always() &&
       (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped') &&
       (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped')
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.scan_runner_labels) }}
     permissions:
       contents: read
       packages: write
@@ -325,7 +330,7 @@ jobs:
   vulnerability-scan:
     name: Security Scan (Vulnerabilities)
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.scan_runner_labels) }}
     if: |
       always() &&
       needs.build.result == 'success' &&

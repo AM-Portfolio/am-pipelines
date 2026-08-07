@@ -491,6 +491,15 @@ jobs:
           token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
+      - name: Install yq (if missing)
+        shell: bash
+        run: |
+          if ! command -v yq &> /dev/null; then
+            echo "yq not found. Installing..."
+            sudo curl -L https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o /usr/bin/yq
+            sudo chmod +x /usr/bin/yq
+          fi
+
       - name: Promote Preprod Tag in Git (GitOps)
         shell: bash
         run: |

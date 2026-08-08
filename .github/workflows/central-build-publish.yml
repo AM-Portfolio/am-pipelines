@@ -92,6 +92,13 @@ on:
         type: boolean
         default: false
         description: "Force Docker to build without using cache"
+    secrets:
+      KUBECONFIG_NONPROD:
+        required: false
+        description: "Base64 kubeconfig for am-vps-nonprod (dev + preprod Helm rolls)"
+      KUBECONFIG_PROD:
+        required: false
+        description: "Base64 kubeconfig for Contabo prod cluster (prod Helm rolls only)"
 
 jobs:
   # ============================================================
@@ -353,9 +360,8 @@ jobs:
           exit-code: "0" # Non-blocking (reports but continues)
 
   # ============================================================
-  # DEPLOY — DEV
-  # Self-hosted runner | environment: dev
-  # Runs in parallel with preprod and prod after build + scans
+  # DEPLOY — DEV (am-vps-nonprod / am-apps-dev)
+  # Prefer runners labeled vps-nonprod; kubeconfig via KUBECONFIG_NONPROD
   # ============================================================
   deploy-dev:
     name: Deploy → Dev
@@ -368,6 +374,7 @@ jobs:
       (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
       (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
       (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
+    # Prefer a runner labeled vps-nonprod when available; kubeconfig gate enforces cluster.
     runs-on: [self-hosted, linux, x64, docker]
     environment: ${{ inputs.gh_env_dev || format('dev-{0}', inputs.image_name) }}
     permissions:
@@ -399,6 +406,14 @@ jobs:
           ref: main
           token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
           clean: true
+
+      - name: Select nonprod cluster kubeconfig
+        shell: bash
+        env:
+          KUBECONFIG_NONPROD_B64: ${{ secrets.KUBECONFIG_NONPROD }}
+        run: |
+          chmod +x am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh
+          am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh dev
 
       - name: Deploy to Dev via Helm
         shell: bash
@@ -458,9 +473,8 @@ jobs:
           echo "✅ $dep is healthy in dev"
 
   # ============================================================
-  # DEPLOY — PREPROD
-  # Self-hosted runner | environment: preprod (requires approval)
-  # Parallel with deploy-dev and deploy-prod
+  # DEPLOY — PREPROD (am-vps-nonprod / am-apps-preprod)
+  # Prefer runners labeled vps-nonprod; kubeconfig via KUBECONFIG_NONPROD
   # ============================================================
   deploy-preprod:
     name: Deploy → Preprod
@@ -493,6 +507,14 @@ jobs:
           ref: main
           token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
           clean: true
+
+      - name: Select nonprod cluster kubeconfig
+        shell: bash
+        env:
+          KUBECONFIG_NONPROD_B64: ${{ secrets.KUBECONFIG_NONPROD }}
+        run: |
+          chmod +x am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh
+          am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh preprod
 
       - name: Deploy to Preprod via Helm
         shell: bash
@@ -563,9 +585,8 @@ jobs:
           kubectl describe deployment/"$INPUT_IMAGE_NAME" -n "$INPUT_PREPROD_NAMESPACE" 2>&1 | tail -n 30
 
   # ============================================================
-  # DEPLOY — PROD
-  # Self-hosted runner | environment: prod (requires approval)
-  # Parallel with deploy-dev and deploy-preprod when deploy_prod == true
+  # DEPLOY — PROD (Contabo / am-apps-prod only)
+  # Prefer runners labeled vps-prod; kubeconfig via KUBECONFIG_PROD
   # ============================================================
   deploy-prod:
     name: Deploy → Prod
@@ -598,6 +619,14 @@ jobs:
           ref: main
           token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
           clean: true
+
+      - name: Select prod cluster kubeconfig
+        shell: bash
+        env:
+          KUBECONFIG_PROD_B64: ${{ secrets.KUBECONFIG_PROD }}
+        run: |
+          chmod +x am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh
+          am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh prod
 
       - name: Deploy to Prod via Helm
         shell: bash

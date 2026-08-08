@@ -44,3 +44,9 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- $preferred -}}
 {{- end -}}
 {{- end }}
+
+{{/* CSI vaultAuthMountPath is the mount name without the auth/ prefix. */}}
+{{- define "universal-chart.vaultAuthMountPath" -}}
+{{- $p := and .Values.vault .Values.vault.authPath | default .Values.global.vault.authPath | default "auth/kubernetes" -}}
+{{- trimPrefix "auth/" $p -}}
+{{- end }}

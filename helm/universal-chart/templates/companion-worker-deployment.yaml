@@ -3,6 +3,7 @@
 {{- $fullname := include "universal-chart.fullname" . }}
 {{- $suffix := default "worker" $cw.nameSuffix }}
 {{- $vaultEnabled := or .Values.global.vault.enabled (and .Values.vault .Values.vault.enabled | default false) }}
+{{- $vaultCsiEnabled := and $vaultEnabled (or .Values.global.vault.csi.enabled (and .Values.vault .Values.vault.csi .Values.vault.csi.enabled | default false)) }}
 {{- $vaultSecrets := merge (default (dict) .Values.global.vault.secrets) (and .Values.vault .Values.vault.secretPaths | default (dict)) }}
 apiVersion: apps/v1
 kind: Deployment
@@ -29,7 +30,7 @@ spec:
         {{- with $cw.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-        {{- if $vaultEnabled }}
+        {{- if and $vaultEnabled (not $vaultCsiEnabled) }}
         vault.hashicorp.com/agent-inject: "true"
         vault.hashicorp.com/agent-init-first: "true"
         vault.hashicorp.com/role: {{ and .Values.vault .Values.vault.role | default .Values.global.vault.role | default (printf "am-%s-role" $fullname) | quote }}
@@ -84,16 +85,21 @@ spec:
           ports:
             - containerPort: {{ $cw.port }}
           {{- end }}
-          {{- if or $vaultEnabled $cw.entrypoint }}
+          {{- if or (and $vaultEnabled (not $vaultCsiEnabled)) $cw.entrypoint }}
           command: ["/bin/sh", "-c"]
           args:
             - |
-              {{- if $vaultEnabled }}
+              {{- if and $vaultEnabled (not $vaultCsiEnabled) }}
               {{- range $k, $v := $vaultSecrets }}
               . /vault/secrets/{{ $k }} 2>/dev/null || true
               {{- end }}
               {{- end }}
               {{ default "exec sleep infinity" $cw.entrypoint }}
+          {{- end }}
+          {{- if $vaultCsiEnabled }}
+          envFrom:
+            - secretRef:
+                name: {{ $fullname }}-synced-secrets
           {{- end }}
           env:
             - name: ENVIRONMENT
@@ -131,4 +137,19 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
           {{- end }}
+          {{- if $vaultCsiEnabled }}
+          volumeMounts:
+            - name: vault-secrets-volume
+              mountPath: "/mnt/secrets-store"
+              readOnly: true
+          {{- end }}
+      {{- if $vaultCsiEnabled }}
+      volumes:
+        - name: vault-secrets-volume
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: {{ $fullname }}-vault-secrets
+      {{- end }}
 {{- end }}

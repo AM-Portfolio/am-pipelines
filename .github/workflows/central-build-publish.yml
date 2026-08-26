@@ -97,6 +97,11 @@ on:
         type: boolean
         default: false
         description: "Commit image digest freeze to AM-Portfolio/am-gitops releases/preprod + image-tags (Argo CD). Prefer over helm deploy-preprod."
+      cosign_sign:
+        required: false
+        type: boolean
+        default: false
+        description: "Sign pushed image with cosign (keyless GitHub OIDC). Also enabled when gitops_write_preprod is true."
       gitops_values_repo:
         required: false
         type: string
@@ -181,6 +186,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write # cosign keyless (GitHub OIDC)
     outputs:
       image_digest: ${{ steps.push.outputs.digest }}
       image_tag: ${{ steps.push.outputs.tag }}
@@ -355,6 +361,24 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "repository=$IMAGE_ID" >> "$GITHUB_OUTPUT"
           echo "Pushed $IMAGE_ID@$DIGEST (tag $TAG)"
+
+      # Phase 5: keyless cosign sign. am-apps-prod Kyverno will require
+      # digest-pinned image refs (and eventually signatures) — prefer
+      # repository@sha256:... over mutable tags in GitOps freezes.
+      - name: Install cosign
+        if: ${{ inputs.image_name != '' && (inputs.cosign_sign == true || inputs.gitops_write_preprod == true) }}
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image (cosign keyless OIDC)
+        if: ${{ inputs.image_name != '' && (inputs.cosign_sign == true || inputs.gitops_write_preprod == true) }}
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          REPOSITORY: ${{ steps.push.outputs.repository }}
+        run: |
+          set -euo pipefail
+          IMAGE_ID="$REPOSITORY"
+          echo "Signing $IMAGE_ID@$DIGEST (keyless GitHub OIDC) ..."
+          cosign sign --yes "$IMAGE_ID@$DIGEST"
 
   # ============================================================
   # GITOPS — write preprod freeze to am-gitops (Argo CD)

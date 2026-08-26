@@ -1,0 +1,23 @@
+# Stub values for helm template CI - verifies digest-aware image ref renders.
+image:
+  repository: stub-service
+
+global:
+  image:
+    registry: ghcr.io/am-portfolio
+    digest: "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+    tag: "ignored-when-digest-set"
+    pullPolicy: IfNotPresent
+  vault:
+    enabled: false
+
+# Top-level vault required by serviceaccount template (nil-safe or).
+vault:
+  enabled: false
+
+environment: ci-stub
+language: python
+replicaCount: 1
+port: 8080
+service:
+  port: 8080

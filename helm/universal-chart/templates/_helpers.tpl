@@ -50,3 +50,15 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- $p := and .Values.vault .Values.vault.authPath | default .Values.global.vault.authPath | default "auth/kubernetes" -}}
 {{- trimPrefix "auth/" $p -}}
 {{- end }}
+
+{{/* Image ref: prefer digest (immutable) over mutable tag. */}}
+{{- define "universal-chart.image" -}}
+{{- $reg := .Values.global.image.registry -}}
+{{- $repo := .Values.image.repository -}}
+{{- $digest := .Values.global.image.digest | default "" -}}
+{{- if $digest -}}
+{{- printf "%s/%s@%s" $reg $repo $digest -}}
+{{- else -}}
+{{- printf "%s/%s:%s" $reg $repo .Values.global.image.tag -}}
+{{- end -}}
+{{- end }}

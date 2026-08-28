@@ -203,18 +203,18 @@ jobs:
               CHECK_URL="${MAVEN_REPO_URL}/${GROUP_PATH}/${ARTIFACT_ID}/${RELEASE}/${ARTIFACT_ID}-${RELEASE}.pom"
               HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
                 -H "Authorization: Bearer $GITHUB_TOKEN" "$CHECK_URL")
-              echo "Registry check for $RELEASE -> HTTP $HTTP_STATUS"
+              echo "Registry check for $RELEASE -> HTTP $HTTP_STATUS" >&2
               if [ "$HTTP_STATUS" == "200" ]; then
-                echo "Version $RELEASE already exists in registry. Auto-incrementing patch version."
+                echo "Version $RELEASE already exists in registry. Auto-incrementing patch version." >&2
                 MAJOR=$(echo "$RELEASE" | cut -d. -f1)
                 MINOR=$(echo "$RELEASE" | cut -d. -f2)
                 PATCH=$(echo "$RELEASE" | cut -d. -f3 | sed 's/-.*//')
                 PATCH=$((PATCH + 1))
                 RELEASE="${MAJOR}.${MINOR}.${PATCH}"
                 mvn -B -f "$POM_FILE" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
-                  -DnewVersion="$RELEASE" -DgenerateBackupPoms=false
+                  -DnewVersion="$RELEASE" -DgenerateBackupPoms=false >&2
               else
-                echo "Version $RELEASE is free. Proceeding with publish."
+                echo "Version $RELEASE is free. Proceeding with publish." >&2
                 break
               fi
             done
@@ -225,12 +225,12 @@ jobs:
             local POM_FILE="$1"
             local CURRENT
             CURRENT=$(mvn -N -q -f "$POM_FILE" -DforceStdout help:evaluate -Dexpression=project.version)
-            echo "Current version: $CURRENT"
+            echo "Current version: $CURRENT" >&2
             if echo "$CURRENT" | grep -q 'SNAPSHOT'; then
               mvn -B -f "$POM_FILE" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
-                -DremoveSnapshot -DgenerateBackupPoms=false
+                -DremoveSnapshot -DgenerateBackupPoms=false >&2
             else
-              echo "Already a release version — no change."
+              echo "Already a release version — no change." >&2
             fi
             bump_if_exists "$POM_FILE"
           }

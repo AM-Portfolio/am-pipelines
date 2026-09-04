@@ -79,7 +79,7 @@ spec:
             capabilities:
               drop:
                 - ALL
-          image: "{{ .Values.global.image.registry }}/{{ .Values.image.repository }}:{{ .Values.global.image.tag }}"
+          image: {{ include "universal-chart.image" . | quote }}
           imagePullPolicy: {{ .Values.global.image.pullPolicy }}
           {{- if and $cw.port (gt (int $cw.port) 0) }}
           ports:

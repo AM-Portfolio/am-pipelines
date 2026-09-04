@@ -2,6 +2,8 @@ global:
   image:
     registry: ghcr.io/am-portfolio
     tag: latest
+    # When set (sha256:...), takes precedence over tag (immutable GitOps freezes).
+    digest: ""
     pullPolicy: IfNotPresent
     imagePullSecrets: []
   vault:

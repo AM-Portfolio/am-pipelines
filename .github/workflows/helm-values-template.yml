@@ -1,0 +1,48 @@
+# Renders universal-chart with a digest stub to catch template regressions
+# before GitOps freezes rely on global.image.digest.
+name: Helm Values Template (digest)
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  push:
+    paths:
+      - "helm/universal-chart/**"
+      - ".github/workflows/helm-values-template.yml"
+      - ".github/workflows/stubs/helm-digest-values.yaml"
+  pull_request:
+    paths:
+      - "helm/universal-chart/**"
+      - ".github/workflows/helm-values-template.yml"
+      - ".github/workflows/stubs/helm-digest-values.yaml"
+
+jobs:
+  helm-template:
+    name: helm template (digest stub)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.14.4
+
+      - name: Render chart with digest values
+        run: |
+          set -euo pipefail
+          OUT=$(mktemp)
+          helm template stub-service ./helm/universal-chart \
+            -f .github/workflows/stubs/helm-digest-values.yaml \
+            --namespace am-apps-preprod \
+            > "$OUT"
+          echo "--- rendered (image lines) ---"
+          grep -E 'image:|sha256:' "$OUT" || true
+          if ! grep -q 'ghcr.io/am-portfolio/stub-service@sha256:0000000000000000000000000000000000000000000000000000000000000001' "$OUT"; then
+            echo "::error::Expected digest-pinned image ref missing from helm template output"
+            exit 1
+          fi
+          echo "OK: chart renders digest-pinned image ref"

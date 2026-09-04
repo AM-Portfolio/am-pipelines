@@ -32,3 +32,21 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "universal-chart.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
+
+{{/* Vault API address: HTTPS preferred; HTTP fallback when useAddressFallback is set (Kind in-cluster). */}}
+{{- define "universal-chart.vaultAddress" -}}
+{{- $useFb := or .Values.global.vault.useAddressFallback (and .Values.vault .Values.vault.useAddressFallback | default false) -}}
+{{- $fallback := .Values.global.vault.addressFallback | default (and .Values.vault .Values.vault.addressFallback) | default "http://vault.vault.svc:8200" -}}
+{{- $preferred := .Values.global.vault.address | default (and .Values.vault .Values.vault.address) | default "https://vault.asrax.in" -}}
+{{- if $useFb -}}
+{{- $fallback -}}
+{{- else -}}
+{{- $preferred -}}
+{{- end -}}
+{{- end }}
+
+{{/* CSI vaultAuthMountPath is the mount name without the auth/ prefix. */}}
+{{- define "universal-chart.vaultAuthMountPath" -}}
+{{- $p := and .Values.vault .Values.vault.authPath | default .Values.global.vault.authPath | default "auth/kubernetes" -}}
+{{- trimPrefix "auth/" $p -}}
+{{- end }}

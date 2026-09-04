@@ -137,9 +137,24 @@ spec:
             {{- include "universal-chart.batchSearchEnv" . | nindent 12 }}
             {{- include "universal-chart.schedulerEnv" . | nindent 12 }}
             {{- if .Values.env }}
+            {{- /* CSI envFrom must win over hardcoded values.env for the same key (e.g. Contabo Mongo URI). */}}
+            {{- $csiEnvKeys := dict }}
+            {{- if $vaultCsiEnabled }}
+            {{- range $sk, $sv := $vaultSecrets }}
+            {{- if and (not (kindIs "string" $sv)) $sv.mappings $sv.path }}
+            {{- range $moduleVar, $vaultKey := $sv.mappings }}
+            {{- if ne $vaultKey "__jaas__" }}
+            {{- $_ := set $csiEnvKeys $moduleVar true }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
             {{- range $k, $v := .Values.env }}
+            {{- if not (hasKey $csiEnvKeys $k) }}
             - name: {{ $k | quote }}
               value: {{ $v | quote }}
+            {{- end }}
             {{- end }}
             {{- end }}
           {{- if .Values.resources }}

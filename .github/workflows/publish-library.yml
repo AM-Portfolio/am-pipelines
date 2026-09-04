@@ -5,7 +5,8 @@ name: Publish Library
 #   action: publish (deploy/release) | verify (build/test only, no registry push)
 #   use_release_version: request -SNAPSHOT strip (honored only on refs/heads/main or refs/heads/master)
 #
-# java   → mvn deploy → GitHub Packages (github / github-core / github-investment ids)
+# java   → mvn deploy → GitHub Packages (github / github-core / github-investment / github-trade)
+#         Maven auth: username x-access-token + GHCR_TOKEN|GITHUB_PACKAGES_TOKEN|GITHUB_TOKEN
 # python → wheel/sdist → GitHub Release
 # flutter → analyze/test → zip → GitHub Release (skipped when pubspec has publish_to: none)
 
@@ -151,22 +152,22 @@ jobs:
             <servers>
               <server>
                 <id>github</id>
-                <username>${env.GITHUB_ACTOR}</username>
+                <username>x-access-token</username>
                 <password>${env.GITHUB_TOKEN}</password>
               </server>
               <server>
                 <id>github-investment</id>
-                <username>${env.GITHUB_ACTOR}</username>
+                <username>x-access-token</username>
                 <password>${env.GITHUB_TOKEN}</password>
               </server>
               <server>
                 <id>github-trade</id>
-                <username>${env.GITHUB_ACTOR}</username>
+                <username>x-access-token</username>
                 <password>${env.GITHUB_TOKEN}</password>
               </server>
               <server>
                 <id>github-core</id>
-                <username>${env.GITHUB_ACTOR}</username>
+                <username>x-access-token</username>
                 <password>${env.GITHUB_TOKEN}</password>
               </server>
             </servers>
@@ -185,6 +186,8 @@ jobs:
         run: |
           ROOT_POM="${{ github.workspace }}/pom.xml"
           MODULE_DIR="${{ inputs.working_directory }}"
+          MODULE_DIR="${MODULE_DIR#./}"
+          MODULE_DIR="${MODULE_DIR%/}"
           MODULE_POM="${{ github.workspace }}/${MODULE_DIR}/pom.xml"
 
           bump_if_exists() {
@@ -200,76 +203,81 @@ jobs:
               CHECK_URL="${MAVEN_REPO_URL}/${GROUP_PATH}/${ARTIFACT_ID}/${RELEASE}/${ARTIFACT_ID}-${RELEASE}.pom"
               HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
                 -H "Authorization: Bearer $GITHUB_TOKEN" "$CHECK_URL")
-              echo "Registry check for $RELEASE -> HTTP $HTTP_STATUS"
+              echo "Registry check for $RELEASE -> HTTP $HTTP_STATUS" >&2
               if [ "$HTTP_STATUS" == "200" ]; then
-                echo "Version $RELEASE already exists in registry. Auto-incrementing patch version."
+                echo "Version $RELEASE already exists in registry. Auto-incrementing patch version." >&2
                 MAJOR=$(echo "$RELEASE" | cut -d. -f1)
                 MINOR=$(echo "$RELEASE" | cut -d. -f2)
                 PATCH=$(echo "$RELEASE" | cut -d. -f3 | sed 's/-.*//')
                 PATCH=$((PATCH + 1))
                 RELEASE="${MAJOR}.${MINOR}.${PATCH}"
                 mvn -B -f "$POM_FILE" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
-                  -DnewVersion="$RELEASE" -DgenerateBackupPoms=false
+                  -DnewVersion="$RELEASE" -DgenerateBackupPoms=false >&2
               else
-                echo "Version $RELEASE is free. Proceeding with publish."
+                echo "Version $RELEASE is free. Proceeding with publish." >&2
                 break
               fi
             done
-            echo "FINAL_RELEASE_VERSION=$RELEASE" >> "$GITHUB_ENV"
+            echo "$RELEASE"
           }
 
-          if [ -f "$ROOT_POM" ] && [ "$MODULE_DIR" != "." ] && [ "$MODULE_DIR" != "./" ]; then
-            echo "Workspace-level root pom.xml found. Evaluating and promoting from reactor root."
-            CURRENT=$(mvn -N -q -f "$ROOT_POM" -DforceStdout help:evaluate -Dexpression=project.version)
-            echo "Current version: $CURRENT"
+          promote_pom() {
+            local POM_FILE="$1"
+            local CURRENT
+            CURRENT=$(mvn -N -q -f "$POM_FILE" -DforceStdout help:evaluate -Dexpression=project.version)
+            echo "Current version: $CURRENT" >&2
             if echo "$CURRENT" | grep -q 'SNAPSHOT'; then
-              mvn -B -f "$ROOT_POM" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
-                -DremoveSnapshot -DgenerateBackupPoms=false
+              mvn -B -f "$POM_FILE" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
+                -DremoveSnapshot -DgenerateBackupPoms=false >&2
             else
-              echo "Already a release version — no change."
+              echo "Already a release version — no change." >&2
             fi
+            bump_if_exists "$POM_FILE"
+          }
 
-            bump_if_exists "$ROOT_POM"
-            RELEASE="$FINAL_RELEASE_VERSION"
+          IN_REACTOR=false
+          if [ -f "$ROOT_POM" ] && grep -Fq "<module>${MODULE_DIR}</module>" "$ROOT_POM"; then
+            IN_REACTOR=true
+          fi
+
+          INDEPENDENT=false
+          if [ -f "$ROOT_POM" ] && [ -f "$MODULE_POM" ] && [ "$MODULE_DIR" != "." ]; then
+            ROOT_VERSION=$(mvn -N -q -f "$ROOT_POM" -DforceStdout help:evaluate -Dexpression=project.version 2>/dev/null)
+            MODULE_VERSION=$(mvn -N -q -f "$MODULE_POM" -DforceStdout help:evaluate -Dexpression=project.version 2>/dev/null)
+            if [ "$ROOT_VERSION" != "$MODULE_VERSION" ]; then
+              INDEPENDENT=true
+              echo "Module has independent version ($MODULE_VERSION vs root $ROOT_VERSION). Promoting module POM only."
+            fi
+          fi
+
+          if [ "$MODULE_DIR" = "." ] || [ "$INDEPENDENT" = "true" ] || [ "$IN_REACTOR" = "false" ]; then
+            echo "Promoting from module POM: $MODULE_POM"
+            RELEASE=$(promote_pom "$MODULE_POM")
             echo "Release version: $RELEASE"
-
-            # Keep the target module aligned with the promoted root (covers modules outside the reactor).
-            perl -i -0pe "s/(<artifactId>am-core-services<\/artifactId>\s*<version>)[^<]+(<\/version>)/\${1}${RELEASE}\${2}/" "$MODULE_POM"
-
-            if grep -Fq "<module>${MODULE_DIR}</module>" "$ROOT_POM"; then
-              mvn -B -f "$ROOT_POM" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
-                -pl "$MODULE_DIR" -DnewVersion="$RELEASE" -DgenerateBackupPoms=false
-            else
-              mvn -B -f "$MODULE_POM" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
-                -DnewVersion="$RELEASE" -DgenerateBackupPoms=false
-            fi
+            echo "FINAL_RELEASE_VERSION=$RELEASE" >> "$GITHUB_ENV"
+            echo "PROMOTE_INDEPENDENT=true" >> "$GITHUB_ENV"
           else
-            CURRENT=$(mvn -N -q -f "$MODULE_POM" -DforceStdout help:evaluate -Dexpression=project.version)
-            echo "Current version: $CURRENT"
-            if echo "$CURRENT" | grep -q 'SNAPSHOT'; then
-              echo "Promoting version locally in working directory."
-              mvn -B -f "$MODULE_POM" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
-                -DremoveSnapshot -DgenerateBackupPoms=false
-            else
-              echo "Already a release version — no change."
-            fi
-
-            bump_if_exists "$MODULE_POM"
-            RELEASE="$FINAL_RELEASE_VERSION"
+            echo "Workspace-level root pom.xml found. Evaluating and promoting from reactor root."
+            RELEASE=$(promote_pom "$ROOT_POM")
             echo "Release version: $RELEASE"
+            echo "FINAL_RELEASE_VERSION=$RELEASE" >> "$GITHUB_ENV"
+            echo "PROMOTE_INDEPENDENT=false" >> "$GITHUB_ENV"
+            mvn -B -f "$ROOT_POM" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
+              -pl "$MODULE_DIR" -DnewVersion="$RELEASE" -DgenerateBackupPoms=false
           fi
 
       - name: Verify Java library
         if: inputs.language == 'java' && inputs.action == 'verify'
         env:
           GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
-          GITHUB_ACTOR: ${{ github.actor }}
         run: |
           ROOT_POM="${{ github.workspace }}/pom.xml"
           MODULE_DIR="${{ inputs.working_directory }}"
+          MODULE_DIR="${MODULE_DIR#./}"
+          MODULE_DIR="${MODULE_DIR%/}"
           MODULE_POM="${{ github.workspace }}/${MODULE_DIR}/pom.xml"
-          if [ -f "$ROOT_POM" ] && [ "$MODULE_DIR" != "." ] && [ "$MODULE_DIR" != "./" ] && grep -Fq "<module>${MODULE_DIR}</module>" "$ROOT_POM"; then
-            mvn -B -f "$ROOT_POM" clean verify -pl "$MODULE_DIR" -DskipTests
+          if [ -f "$ROOT_POM" ] && [ "$MODULE_DIR" != "." ] && grep -Fq "<module>${MODULE_DIR}</module>" "$ROOT_POM"; then
+            mvn -B -f "$ROOT_POM" clean verify -pl "$MODULE_DIR" -am -DskipTests
           else
             mvn -B -f "$MODULE_POM" clean verify -DskipTests
           fi
@@ -278,13 +286,15 @@ jobs:
         if: inputs.language == 'java' && inputs.action == 'publish'
         env:
           GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
-          GITHUB_ACTOR: ${{ github.actor }}
         run: |
           ROOT_POM="${{ github.workspace }}/pom.xml"
           MODULE_DIR="${{ inputs.working_directory }}"
+          MODULE_DIR="${MODULE_DIR#./}"
+          MODULE_DIR="${MODULE_DIR%/}"
           MODULE_POM="${{ github.workspace }}/${MODULE_DIR}/pom.xml"
-          if [ -f "$ROOT_POM" ] && [ "$MODULE_DIR" != "." ] && [ "$MODULE_DIR" != "./" ] && grep -Fq "<module>${MODULE_DIR}</module>" "$ROOT_POM"; then
-            MVN_DEPLOY=(mvn -B -f "$ROOT_POM" clean deploy -pl "$MODULE_DIR" -DskipTests)
+          if [ -f "$ROOT_POM" ] && [ "$MODULE_DIR" != "." ] && grep -Fq "<module>${MODULE_DIR}</module>" "$ROOT_POM"; then
+            # -am builds/publishes reactor deps (e.g. am-trade-domain) that are not in Packages yet
+            MVN_DEPLOY=(mvn -B -f "$ROOT_POM" clean deploy -pl "$MODULE_DIR" -am -DskipTests)
           else
             MVN_DEPLOY=(mvn -B -f "$MODULE_POM" clean deploy -DskipTests)
           fi
@@ -327,7 +337,9 @@ jobs:
 
           ROOT_POM="${{ github.workspace }}/pom.xml"
           WORKING_DIR="${{ inputs.working_directory }}"
-          TARGET_POM="${{ github.workspace }}/${WORKING_DIR}/pom.xml"
+          WORKING_DIR="${WORKING_DIR#./}"
+          WORKING_DIR="${WORKING_DIR%/}"
+          MODULE_POM="${{ github.workspace }}/${WORKING_DIR}/pom.xml"
 
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
@@ -343,11 +355,11 @@ jobs:
             git checkout -B $BRANCH_NAME origin/$BRANCH_NAME
 
             # Re-apply the next snapshot version on this clean branch tip.
-            if [ -f "$ROOT_POM" ] && [ "$WORKING_DIR" != "." ] && [ "$WORKING_DIR" != "./" ]; then
-              mvn -B -f "$ROOT_POM" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
+            if [ "${PROMOTE_INDEPENDENT:-false}" = "true" ] || [ "$WORKING_DIR" = "." ]; then
+              mvn -B -f "$MODULE_POM" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
                 -DnewVersion="$NEXT_SNAPSHOT" -DgenerateBackupPoms=false
             else
-              mvn -B -f "$TARGET_POM" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
+              mvn -B -f "$ROOT_POM" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
                 -DnewVersion="$NEXT_SNAPSHOT" -DgenerateBackupPoms=false
             fi
 

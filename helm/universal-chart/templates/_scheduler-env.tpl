@@ -173,23 +173,23 @@
 {{- with .cacheTtl }}
 {{- with .historical }}
 - name: REDIS_CACHE_TTL_HISTORICAL
-  value: {{ . | quote }}
+  value: {{ printf "%.0f" (. | float64) | quote }}
 {{- end }}
 {{- with .analysis }}
 - name: REDIS_CACHE_TTL_ANALYSIS
-  value: {{ . | quote }}
+  value: {{ printf "%.0f" (. | float64) | quote }}
 {{- end }}
 {{- with .intradayPast }}
 - name: REDIS_CACHE_TTL_INTRADAY_PAST
-  value: {{ . | quote }}
+  value: {{ printf "%.0f" (. | float64) | quote }}
 {{- end }}
 {{- with .intradayFuture }}
 - name: REDIS_CACHE_TTL_INTRADAY_FUTURE
-  value: {{ . | quote }}
+  value: {{ printf "%.0f" (. | float64) | quote }}
 {{- end }}
 {{- with .intradayBuffer }}
 - name: REDIS_CACHE_TTL_INTRADAY_BUFFER
-  value: {{ . | quote }}
+  value: {{ printf "%.0f" (. | float64) | quote }}
 {{- end }}
 {{- end }}
 {{- end }}{{/* end with .redis */}}

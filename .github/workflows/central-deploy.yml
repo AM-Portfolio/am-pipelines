@@ -36,13 +36,20 @@ on:
         required: false
         type: string
         description: "Explicit GitHub environment name for approvals"
+    secrets:
+      KUBECONFIG_NONPROD:
+        required: false
+        description: "Base64 kubeconfig for am-vps-nonprod (dev + preprod)"
+      KUBECONFIG_PROD:
+        required: false
+        description: "Base64 kubeconfig for Contabo prod (prod only)"
 
 jobs:
   deploy:
     name: Deploy → ${{ inputs.environment }}
-    runs-on: self-hosted
+    runs-on: [self-hosted, linux, x64, docker]
     environment: ${{ inputs.gh_environment || format('{0}-{1}', inputs.environment, inputs.service_name) }}
-    
+
     steps:
       - name: Checkout Application Repo
         uses: actions/checkout@v4
@@ -56,6 +63,15 @@ jobs:
           path: am-pipelines-repo
           ref: main
           token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Select cluster kubeconfig
+        shell: bash
+        env:
+          KUBECONFIG_NONPROD_B64: ${{ secrets.KUBECONFIG_NONPROD }}
+          KUBECONFIG_PROD_B64: ${{ secrets.KUBECONFIG_PROD }}
+        run: |
+          chmod +x am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh
+          am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh "${{ inputs.environment }}"
 
       - name: Deploy via Helm
         shell: bash
@@ -81,8 +97,8 @@ jobs:
             VALUES_ARG+=("-f" "$ENV_VALUES")
           fi
 
-          echo "🚀 [$INPUT_ENVIRONMENT] Deploying $INPUT_SERVICE_NAME ..."
-          
+          echo "[$INPUT_ENVIRONMENT] Deploying $INPUT_SERVICE_NAME → cluster for $INPUT_NAMESPACE"
+
           REPO_OWNER=$(echo "$REPO_OWNER_RAW" | tr '[:upper:]' '[:lower:]')
 
           helm upgrade --install "$INPUT_SERVICE_NAME" ./am-pipelines-repo/helm/universal-chart \
@@ -103,28 +119,25 @@ jobs:
         run: |
           ns="$INPUT_NAMESPACE"
           dep="$INPUT_SERVICE_NAME"
-          echo "⏳ Waiting for rollout: $dep in $ns ..."
+          echo "Waiting for rollout: $dep in $ns ..."
 
           if ! kubectl rollout status deployment/$dep -n $ns --timeout=10m; then
-            echo "❌ Rollout FAILED for $dep"
+            echo "Rollout FAILED for $dep"
             kubectl get pods -n $ns
             kubectl get events -n $ns --sort-by='.lastTimestamp' | tail -n 20
             exit 1
           fi
-          echo "✅ $dep is healthy in $INPUT_ENVIRONMENT"
+          echo "$dep is healthy in $INPUT_ENVIRONMENT"
 
           # Optional companion worker (universal-chart companionWorker.enabled)
           worker="${dep}-worker"
           if kubectl get deployment/"$worker" -n "$ns" >/dev/null 2>&1; then
-            echo "⏳ Waiting for companion worker rollout: $worker ..."
+            echo "Waiting for companion worker rollout: $worker ..."
             if ! kubectl rollout status deployment/"$worker" -n "$ns" --timeout=10m; then
-              echo "❌ Rollout FAILED for $worker"
+              echo "Rollout FAILED for $worker"
               kubectl get pods -n "$ns"
               kubectl get events -n "$ns" --sort-by='.lastTimestamp' | tail -n 20
               exit 1
             fi
-            echo "✅ $worker is healthy in $INPUT_ENVIRONMENT"
+            echo "$worker is healthy in $INPUT_ENVIRONMENT"
           fi
-
-
-# comment

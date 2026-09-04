@@ -18,7 +18,8 @@
 
 ### Registries
 
-- Java: `distributionManagement` in the project POM (`github`, `github-core`, `github-investment`, …).
+- Java: `distributionManagement` in the project POM (`github`, `github-core`, `github-investment`, `github-trade`, …).
+- Maven `settings.xml` servers use username `x-access-token` with password from `GHCR_TOKEN` / `GITHUB_PACKAGES_TOKEN` / `GITHUB_TOKEN` (org PAT preferred for cross-repo package reads such as `am-trade-sdk-core`).
 - Python / Flutter: GitHub Releases (`.whl` or `.zip`); pip/pub registries are not used for private packages.
 
 ## am-core-services

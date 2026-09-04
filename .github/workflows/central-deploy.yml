@@ -47,7 +47,7 @@ on:
 jobs:
   deploy:
     name: Deploy → ${{ inputs.environment }}
-    runs-on: [self-hosted, linux, x64, docker]
+    runs-on: ${{ inputs.environment == 'prod' && fromJSON('["self-hosted","linux","x64","docker","vps-prod"]') || fromJSON('["self-hosted","linux","x64","docker","vps-nonprod"]') }}
     environment: ${{ inputs.gh_environment || format('{0}-{1}', inputs.environment, inputs.service_name) }}
 
     steps:
@@ -86,16 +86,35 @@ jobs:
           REPO_OWNER_RAW: ${{ github.repository_owner }}
         run: |
           BASE_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.yaml"
+          MAPPING_VALUES="$INPUT_WORKING_DIRECTORY/helm/vault-mappings.yaml"
           ENV_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.$INPUT_ENVIRONMENT.yaml"
 
           VALUES_ARG=()
           if [ -f "$BASE_VALUES" ]; then
             VALUES_ARG+=("-f" "$BASE_VALUES")
           fi
-          # Check for env specific values (supports both preprod and prod)
+          if [ -f "$MAPPING_VALUES" ]; then
+            VALUES_ARG+=("-f" "$MAPPING_VALUES")
+          else
+            echo "WARN: missing $MAPPING_VALUES — Vault CSI mappings will not be applied"
+          fi
           if [ -f "$ENV_VALUES" ]; then
             VALUES_ARG+=("-f" "$ENV_VALUES")
+          else
+            echo "WARN: missing $ENV_VALUES"
           fi
+
+          if [ "$INPUT_ENVIRONMENT" = "dev" ] || [ "$INPUT_ENVIRONMENT" = "preprod" ]; then
+            OVERLAY_DIR="./am-pipelines-repo/helm/overlays/nonprod-kind"
+            for f in vault-https-asrax.yaml hostaliases-kind-local.yaml infra-kind-local-env.yaml; do
+              if [ -f "$OVERLAY_DIR/$f" ]; then
+                VALUES_ARG+=("-f" "$OVERLAY_DIR/$f")
+              else
+                echo "WARN: missing $OVERLAY_DIR/$f"
+              fi
+            done
+          fi
+          echo "Helm values files: ${VALUES_ARG[*]}"
 
           echo "[$INPUT_ENVIRONMENT] Deploying $INPUT_SERVICE_NAME → cluster for $INPUT_NAMESPACE"
 

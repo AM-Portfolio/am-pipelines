@@ -375,7 +375,7 @@ jobs:
       (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
       (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
     # Prefer a runner labeled vps-nonprod when available; kubeconfig gate enforces cluster.
-    runs-on: [self-hosted, linux, x64, docker]
+    runs-on: [self-hosted, linux, x64, docker, vps-nonprod]
     environment: ${{ inputs.gh_env_dev || format('dev-{0}', inputs.image_name) }}
     permissions:
       contents: read
@@ -479,7 +479,7 @@ jobs:
   deploy-preprod:
     name: Deploy → Preprod
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
-    runs-on: [self-hosted, linux, x64, docker]
+    runs-on: [self-hosted, linux, x64, docker, vps-nonprod]
     # Proceed when security jobs succeeded OR were intentionally skipped by caller
     if: |
       always() &&
@@ -591,7 +591,7 @@ jobs:
   deploy-prod:
     name: Deploy → Prod
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
-    runs-on: [self-hosted, linux, x64, docker]
+    runs-on: [self-hosted, linux, x64, docker, vps-prod]
     # Proceed when security jobs succeeded OR were intentionally skipped by caller
     if: |
       always() &&

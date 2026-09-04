@@ -9,9 +9,9 @@ global:
     role: am-backend-role
     authPath: auth/kubernetes
     serviceAccountName: "am-backend-sa" # Standardized backend SA
-    # Preferred: HTTPS Vault (asrax). CSI/injector cannot dual-failover; use useAddressFallback for Kind HTTP.
+    # Preferred: HTTPS Vault. CSI cannot dual-failover. Do not use HTTP or port-forward.
     address: "https://vault.asrax.in"
-    addressFallback: "http://vault.vault.svc:8200"
+    addressFallback: "https://vault.asrax.in"
     useAddressFallback: false
     # Cluster CSI provider (no per-pod vault-agent sidecar). Agent inject only if csi.enabled=false.
     csi:

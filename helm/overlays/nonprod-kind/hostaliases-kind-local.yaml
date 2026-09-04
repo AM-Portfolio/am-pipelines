@@ -1,0 +1,3 @@
+# Empty list replaces values.*.yaml Contabo hostAliases (203.174.22.129).
+# Data plane uses in-cluster DNS from infra-kind-local-env.yaml. Vault is HTTPS.
+hostAliases: []

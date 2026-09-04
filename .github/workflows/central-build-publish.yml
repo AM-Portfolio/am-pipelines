@@ -92,6 +92,26 @@ on:
         type: boolean
         default: false
         description: "Force Docker to build without using cache"
+      dev_runner_labels:
+        required: false
+        type: string
+        default: '["self-hosted", "linux", "x64", "docker"]'
+        description: "JSON array of labels for the dev runner"
+      preprod_runner_labels:
+        required: false
+        type: string
+        default: '["self-hosted", "linux", "x64", "docker"]'
+        description: "JSON array of labels for the preprod runner"
+      prod_runner_labels:
+        required: false
+        type: string
+        default: '["self-hosted", "linux", "x64", "docker"]'
+        description: "JSON array of labels for the prod runner"
+      scan_runner_labels:
+        required: false
+        type: string
+        default: '["self-hosted", "linux", "x64", "docker"]'
+        description: "JSON array of labels for the scanning and build runner"
 
 jobs:
   # ============================================================
@@ -102,7 +122,7 @@ jobs:
     name: Security Scan (Secrets)
     # Skip when caller already ran a shared security gate (e.g. unified-ci.yml)
     if: ${{ !inputs.skip_security_scan && !inputs.skip_secrets_scan }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.scan_runner_labels) }}
     permissions:
       contents: read
     steps:
@@ -125,7 +145,7 @@ jobs:
     name: Security Scan (IaC)
     # Skip when caller already ran a shared security gate (e.g. unified-ci.yml)
     if: ${{ !inputs.skip_security_scan && !inputs.skip_iac_scan }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.scan_runner_labels) }}
     permissions:
       contents: read
     steps:
@@ -155,7 +175,7 @@ jobs:
       always() &&
       (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped') &&
       (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped')
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.scan_runner_labels) }}
     permissions:
       contents: read
       packages: write
@@ -310,7 +330,7 @@ jobs:
   vulnerability-scan:
     name: Security Scan (Vulnerabilities)
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.scan_runner_labels) }}
     if: |
       always() &&
       needs.build.result == 'success' &&
@@ -353,7 +373,7 @@ jobs:
       (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
       (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
       (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
-    runs-on: [self-hosted, linux, x64, docker]
+    runs-on: ${{ fromJSON(inputs.dev_runner_labels) }}
     environment: ${{ inputs.gh_env_dev || format('dev-{0}', inputs.image_name) }}
     permissions:
       contents: read
@@ -450,7 +470,7 @@ jobs:
   deploy-preprod:
     name: Deploy → Preprod
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
-    runs-on: [self-hosted, linux, x64, docker]
+    runs-on: ${{ fromJSON(inputs.preprod_runner_labels) }}
     # Proceed when security jobs succeeded OR were intentionally skipped by caller
     if: |
       always() &&
@@ -461,7 +481,7 @@ jobs:
       (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
     environment: ${{ inputs.gh_env_preprod || format('preprod-{0}', inputs.image_name) }}
     permissions:
-      contents: read
+      contents: write
       packages: write
 
     steps:
@@ -469,83 +489,51 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
-      - name: Checkout Universal Helm Chart
-        uses: actions/checkout@v4
-        with:
-          repository: AM-Portfolio/am-pipelines
-          path: am-pipelines-repo
-          ref: main
-          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
-          clean: true
-
-      - name: Deploy to Preprod via Helm
+      - name: Install yq (if missing)
         shell: bash
-        env:
-          INPUT_WORKING_DIRECTORY: ${{ inputs.working_directory }}
-          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
-          INPUT_PREPROD_NAMESPACE: ${{ inputs.preprod_namespace }}
-          INPUT_REGISTRY: ${{ inputs.registry }}
-          INPUT_LANGUAGE: ${{ inputs.language }}
-          REPO_OWNER_RAW: ${{ github.repository_owner }}
-          RUN_ID: ${{ github.run_id }}
         run: |
-          BASE_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.yaml"
-          MAPPING_VALUES="$INPUT_WORKING_DIRECTORY/helm/vault-mappings.yaml"
-          ENV_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.preprod.yaml"
-
-          VALUES_ARG=()
-          if [ -f "$BASE_VALUES" ]; then
-            VALUES_ARG+=("-f" "$BASE_VALUES")
-          fi
-          if [ -f "$MAPPING_VALUES" ]; then
-            VALUES_ARG+=("-f" "$MAPPING_VALUES")
-          fi
-          if [ -f "$ENV_VALUES" ]; then
-            VALUES_ARG+=("-f" "$ENV_VALUES")
+          if ! command -v yq &> /dev/null; then
+            echo "yq not found. Installing..."
+            sudo curl -L https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o /usr/bin/yq
+            sudo chmod +x /usr/bin/yq
           fi
 
-          echo "🚀 [PREPROD] Deploying $INPUT_IMAGE_NAME → $INPUT_PREPROD_NAMESPACE"
-
-          REPO_OWNER=$(echo "$REPO_OWNER_RAW" | tr '[:upper:]' '[:lower:]')
-
-          helm upgrade --install "$INPUT_IMAGE_NAME" ./am-pipelines-repo/helm/universal-chart \
-            --namespace "$INPUT_PREPROD_NAMESPACE" \
-            --create-namespace \
-            --set global.image.registry="$INPUT_REGISTRY/$REPO_OWNER" \
-            --set global.image.tag="$RUN_ID" \
-            --set global.image.pullPolicy="Always" \
-            --set language="$INPUT_LANGUAGE" \
-            "${VALUES_ARG[@]}"
-
-      - name: Verify Preprod Rollout
+      - name: Promote Preprod Tag in Git (GitOps)
         shell: bash
-        env:
-          INPUT_PREPROD_NAMESPACE: ${{ inputs.preprod_namespace }}
-          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
         run: |
-          ns="$INPUT_PREPROD_NAMESPACE"
-          dep="$INPUT_IMAGE_NAME"
-          echo "⏳ Waiting for rollout: $dep in $ns ..."
-
-          if ! kubectl rollout status deployment/$dep -n $ns --timeout=10m; then
-            echo "❌ Rollout FAILED for $dep"
-            kubectl get pods -n $ns
-            kubectl get events -n $ns --sort-by='.lastTimestamp' | tail -n 20
-            exit 1
+          FILE_PATH="${{ inputs.working_directory }}/helm/values.preprod.yaml"
+          if [ -f "$FILE_PATH" ]; then
+            echo "Updating tag in $FILE_PATH to ${{ github.run_id }}..."
+            yq eval '.global.image.tag = "${{ github.run_id }}"' -i "$FILE_PATH"
+          else
+            echo "❌ File not found: $FILE_PATH. Creating a minimal values.preprod.yaml with global.image.tag..."
+            mkdir -p "$(dirname "$FILE_PATH")"
+            echo -e "global:\n  image:\n    tag: \"${{ github.run_id }}\"" > "$FILE_PATH"
           fi
-          echo "✅ $dep is healthy in preprod"
 
-      - name: Diagnostics on Failure
-        if: failure()
-        shell: bash
-        env:
-          INPUT_PREPROD_NAMESPACE: ${{ inputs.preprod_namespace }}
-          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
-        run: |
-          echo "🔍 Preprod deployment failed. Diagnostics:"
-          kubectl get pods -n "$INPUT_PREPROD_NAMESPACE" -o wide
-          kubectl describe deployment/"$INPUT_IMAGE_NAME" -n "$INPUT_PREPROD_NAMESPACE" 2>&1 | tail -n 30
+          # Configure Git
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+          # Determine target branch
+          TARGET_BRANCH=""
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            TARGET_BRANCH="${{ github.head_ref }}"
+          else
+            TARGET_BRANCH="${{ github.ref_name }}"
+          fi
+          echo "Target branch for push is: $TARGET_BRANCH"
+
+          # Stage, commit, and push
+          git add "$FILE_PATH"
+          if git diff --cached --quiet; then
+            echo "No changes to commit. Preprod tag is already set to ${{ github.run_id }}."
+          else
+            git commit -m "chore(preprod): promote image tag to ${{ github.run_id }} [skip ci]"
+            git push origin HEAD:"refs/heads/$TARGET_BRANCH"
+          fi
 
   # ============================================================
   # DEPLOY — PROD
@@ -555,7 +543,7 @@ jobs:
   deploy-prod:
     name: Deploy → Prod
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
-    runs-on: [self-hosted, linux, x64, docker]
+    runs-on: ${{ fromJSON(inputs.prod_runner_labels) }}
     # Proceed when security jobs succeeded OR were intentionally skipped by caller
     if: |
       always() &&

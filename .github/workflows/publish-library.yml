@@ -327,6 +327,7 @@ jobs:
 
           ROOT_POM="${{ github.workspace }}/pom.xml"
           WORKING_DIR="${{ inputs.working_directory }}"
+          TARGET_POM="${{ github.workspace }}/${WORKING_DIR}/pom.xml"
 
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
@@ -346,7 +347,7 @@ jobs:
               mvn -B -f "$ROOT_POM" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
                 -DnewVersion="$NEXT_SNAPSHOT" -DgenerateBackupPoms=false
             else
-              mvn -B -f "$ROOT_POM" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
+              mvn -B -f "$TARGET_POM" org.codehaus.mojo:versions-maven-plugin:2.16.2:set \
                 -DnewVersion="$NEXT_SNAPSHOT" -DgenerateBackupPoms=false
             fi
 

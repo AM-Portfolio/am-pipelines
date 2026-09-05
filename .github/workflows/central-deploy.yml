@@ -59,6 +59,9 @@ jobs:
     name: Deploy → ${{ inputs.environment }}
     runs-on: ${{ inputs.environment == 'prod' && fromJSON('["self-hosted","linux","x64","docker","vps-prod"]') || (inputs.environment == 'preprod' && fromJSON('["self-hosted","linux","x64","docker","preprod"]') || fromJSON('["self-hosted","linux","x64","docker","dev"]')) }}
     environment: ${{ inputs.gh_environment || format('{0}-{1}', inputs.environment, inputs.service_name) }}
+    permissions:
+      contents: write
+      packages: write
 
     steps:
       - name: Checkout Application Repo
@@ -66,6 +69,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
           ref: ${{ inputs.git_ref || github.ref }}
+          fetch-depth: 0
 
       - name: Checkout Universal Helm Chart (am-pipelines)
         uses: actions/checkout@v4
@@ -101,8 +105,27 @@ jobs:
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
           echo "Helm release: $RELEASE (base=$BASE env=$INPUT_ENVIRONMENT)"
 
+      - name: Push ci-image.yaml on feature branch (preprod)
+        if: |
+          inputs.environment == 'preprod' &&
+          inputs.git_ref != '' &&
+          inputs.git_ref != 'main' &&
+          inputs.git_ref != 'master'
+        shell: bash
+        env:
+          INPUT_WORKING_DIRECTORY: ${{ inputs.working_directory }}
+          INPUT_GIT_REF: ${{ inputs.git_ref }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          chmod +x am-pipelines-repo/scripts/ci/write-and-push-ci-image.sh
+          am-pipelines-repo/scripts/ci/write-and-push-ci-image.sh
+
       - name: Align Argo feature-branch (preprod)
-        if: inputs.environment == 'preprod' && inputs.git_ref != ''
+        if: |
+          inputs.environment == 'preprod' &&
+          inputs.git_ref != '' &&
+          inputs.git_ref != 'main' &&
+          inputs.git_ref != 'master'
         shell: bash
         env:
           INPUT_SERVICE_NAME: ${{ steps.release.outputs.base }}
@@ -123,7 +146,37 @@ jobs:
           chmod +x am-pipelines-repo/scripts/ci/preprod-argo-gate.sh
           am-pipelines-repo/scripts/ci/preprod-argo-gate.sh
 
+      - name: Feature deploy via Argo Auto-Sync
+        if: |
+          inputs.environment == 'preprod' &&
+          inputs.git_ref != '' &&
+          inputs.git_ref != 'main' &&
+          inputs.git_ref != 'master' &&
+          inputs.force_helm != true
+        id: argo_feature
+        shell: bash
+        env:
+          INPUT_SERVICE_NAME: ${{ steps.release.outputs.base }}
+        run: |
+          set -euo pipefail
+          APP="${INPUT_SERVICE_NAME}-preprod"
+          if kubectl -n argocd get application "$APP" >/dev/null 2>&1; then
+            chmod +x am-pipelines-repo/scripts/ci/preprod-argo-ensure-auto.sh
+            am-pipelines-repo/scripts/ci/preprod-argo-ensure-auto.sh
+            echo "mode=argo" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=helm" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Deploy via Helm
+        if: |
+          inputs.environment != 'preprod' ||
+          inputs.force_helm == true ||
+          inputs.git_ref == '' ||
+          inputs.git_ref == 'main' ||
+          inputs.git_ref == 'master' ||
+          steps.argo_feature.outputs.mode == 'helm' ||
+          steps.argo_feature.outcome == 'skipped'
         shell: bash
         env:
           INPUT_WORKING_DIRECTORY: ${{ inputs.working_directory }}
@@ -155,6 +208,10 @@ jobs:
           else
             echo "WARN: missing $ENV_VALUES"
           fi
+          CI_IMAGE="$INPUT_WORKING_DIRECTORY/helm/ci-image.yaml"
+          if [ -f "$CI_IMAGE" ]; then
+            VALUES_ARG+=("-f" "$CI_IMAGE")
+          fi
 
           OVERLAY_DIR="./am-pipelines-repo/helm/overlays/nonprod-kind"
           while IFS= read -r f; do
@@ -177,12 +234,8 @@ jobs:
           export IMAGE_TAG="$INPUT_IMAGE_TAG"
           export LANGUAGE="$INPUT_LANGUAGE"
           export CHART_DIR="./am-pipelines-repo/helm/universal-chart"
-          # Pause Argo auto only for preprod feature-branch rolls
-          if [ "$INPUT_ENVIRONMENT" = "preprod" ]; then
-            export PAUSE_ARGO=true
-          else
-            export PAUSE_ARGO=false
-          fi
+          # UI-first: never pause Auto on preprod (ci-image + values revision)
+          export PAUSE_ARGO=false
           export ARGO_APP="$RELEASE_NAME"
           am-pipelines-repo/scripts/ci/bump-release-image.sh -- "${VALUES_ARG[@]}"
 

@@ -665,7 +665,7 @@ jobs:
       )
     environment: ${{ inputs.gh_env_preprod || format('preprod-{0}', inputs.image_name) }}
     permissions:
-      contents: read
+      contents: write
       packages: write
 
     steps:
@@ -673,6 +673,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
       - name: Checkout Universal Helm Chart
         uses: actions/checkout@v4
@@ -707,6 +708,17 @@ jobs:
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
           echo "Preprod Helm release: $RELEASE"
 
+      - name: Push ci-image.yaml on feature branch
+        if: github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master'
+        shell: bash
+        env:
+          INPUT_WORKING_DIRECTORY: ${{ inputs.working_directory }}
+          INPUT_GIT_REF: ${{ github.ref_name }}
+          IMAGE_TAG: ${{ github.run_id }}
+        run: |
+          chmod +x am-pipelines-repo/scripts/ci/write-and-push-ci-image.sh
+          am-pipelines-repo/scripts/ci/write-and-push-ci-image.sh
+
       - name: Align Argo feature-branch (preprod)
         if: github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master'
         shell: bash
@@ -728,7 +740,32 @@ jobs:
           chmod +x am-pipelines-repo/scripts/ci/preprod-argo-gate.sh
           am-pipelines-repo/scripts/ci/preprod-argo-gate.sh
 
+      - name: Feature deploy via Argo Auto-Sync
+        if: github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master'
+        id: argo_feature
+        shell: bash
+        env:
+          INPUT_SERVICE_NAME: ${{ steps.release.outputs.base }}
+          RELEASE_NAME: ${{ steps.release.outputs.release }}
+        run: |
+          set -euo pipefail
+          APP="${INPUT_SERVICE_NAME}-preprod"
+          if kubectl -n argocd get application "$APP" >/dev/null 2>&1; then
+            chmod +x am-pipelines-repo/scripts/ci/preprod-argo-ensure-auto.sh
+            am-pipelines-repo/scripts/ci/preprod-argo-ensure-auto.sh
+            echo "mode=argo" >> "$GITHUB_OUTPUT"
+            echo "Argo UI path: values revision pinned to feature branch; Auto-Sync on; ci-image tag applied via Git"
+          else
+            echo "mode=helm" >> "$GITHUB_OUTPUT"
+            echo "WARN: Application $APP missing — will Helm install"
+          fi
+
       - name: Deploy to Preprod via Helm
+        if: |
+          github.ref == 'refs/heads/main' ||
+          github.ref == 'refs/heads/master' ||
+          steps.argo_feature.outputs.mode == 'helm' ||
+          inputs.force_preprod_helm == true
         shell: bash
         env:
           INPUT_WORKING_DIRECTORY: ${{ inputs.working_directory }}
@@ -739,6 +776,7 @@ jobs:
           IMAGE_BASE: ${{ steps.release.outputs.base }}
           REPO_OWNER_RAW: ${{ github.repository_owner }}
           RUN_ID: ${{ github.run_id }}
+          FORCE_HELM: ${{ inputs.force_preprod_helm }}
         run: |
           set -euo pipefail
           BASE_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.yaml"
@@ -758,6 +796,10 @@ jobs:
             VALUES_ARG+=("-f" "$ENV_VALUES")
           else
             echo "WARN: missing $ENV_VALUES"
+          fi
+          CI_IMAGE="$INPUT_WORKING_DIRECTORY/helm/ci-image.yaml"
+          if [ -f "$CI_IMAGE" ]; then
+            VALUES_ARG+=("-f" "$CI_IMAGE")
           fi
 
           OVERLAY_DIR="./am-pipelines-repo/helm/overlays/nonprod-kind"
@@ -779,9 +821,10 @@ jobs:
           export IMAGE_TAG="$RUN_ID"
           export LANGUAGE="$INPUT_LANGUAGE"
           export CHART_DIR="./am-pipelines-repo/helm/universal-chart"
-          export PAUSE_ARGO=true
+          # Prefer Argo Sync for enrolled apps; do not pause Auto (UI-first)
+          export PAUSE_ARGO=false
           export ARGO_APP="$RELEASE_NAME"
-          echo "Helm values files (fresh install only): ${VALUES_ARG[*]}"
+          echo "Helm values files: ${VALUES_ARG[*]}"
           am-pipelines-repo/scripts/ci/bump-release-image.sh -- "${VALUES_ARG[@]}"
 
       - name: Verify Preprod Rollout

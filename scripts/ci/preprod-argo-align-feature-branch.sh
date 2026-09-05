@@ -8,14 +8,17 @@ APP="${INPUT_SERVICE_NAME}-preprod"
 REF="${INPUT_GIT_REF:?INPUT_GIT_REF required}"
 DEPLOYED_BY="${INPUT_DEPLOYED_BY:-}"
 
-# K8s label values: DNS-ish, max 63
+# K8s label values: alphanumeric / - _ . ; must start and end alphanumeric; max 63
 label_safe() {
   local v="${1:-none}"
   v="${v//\//_}"
   v="${v//\\/_}"
-  v="$(echo "$v" | tr -c 'A-Za-z0-9_.-' '_' | cut -c1-63)"
+  # printf avoids newline → trailing '_' from tr -c
+  v="$(printf '%s' "$v" | tr -c 'A-Za-z0-9_.-' '_' | cut -c1-63)"
+  # Strip leading/trailing non-alphanumeric (K8s requirement)
+  v="$(printf '%s' "$v" | sed -E 's/^[^A-Za-z0-9]+//; s/[^A-Za-z0-9]+$//')"
   [[ -n "$v" ]] || v="none"
-  echo "$v"
+  printf '%s\n' "$v"
 }
 
 REF_LABEL="$(label_safe "$REF")"

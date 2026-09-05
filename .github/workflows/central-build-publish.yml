@@ -95,8 +95,10 @@ on:
       gitops_write_preprod:
         required: false
         type: boolean
-        default: false
-        description: "Auto-commit image tag/digest to AM-Portfolio/am-gitops preprod/image-tags (Argo). Needs GITHUB_PAT with contents:write on am-gitops."
+        # Default on: every main/master build bumps am-gitops so Argo preprod tracks the new image.
+        # Still gated by job if: only runs on main/master. Set false to opt out.
+        default: true
+        description: "Auto-commit image tag/digest to AM-Portfolio/am-gitops preprod/image-tags (Argo). Default true. Needs GITHUB_PAT with contents:write on am-gitops."
       gitops_values_repo:
         required: false
         type: string
@@ -362,7 +364,7 @@ jobs:
     if: |
       always() &&
       inputs.image_name != '' &&
-      inputs.gitops_write_preprod == true &&
+      (inputs.gitops_write_preprod == true || inputs.deploy_preprod == true) &&
       (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') &&
       needs.build.result == 'success' &&
       (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&

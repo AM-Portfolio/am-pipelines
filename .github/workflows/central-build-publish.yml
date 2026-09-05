@@ -54,7 +54,17 @@ on:
         required: false
         type: boolean
         default: true
-        description: "Set to true to enable the preprod deployment stage"
+        description: >-
+          Helm roll to Kind preprod (release = image_name-preprod + Kind Vault overlays).
+          On main/master this is skipped when gitops_write_preprod is true (Argo owns the roll)
+          unless force_preprod_helm is set. Feature branches always Helm when this is true.
+      force_preprod_helm:
+        required: false
+        type: boolean
+        default: false
+        description: >-
+          Preprod only: run Helm on main/master even when gitops_write_preprod is true,
+          and allow Helm while Argo Auto-Sync is on (selfHeal may revert values).
       skip_security_scan:
         required: false
         type: boolean
@@ -545,17 +555,35 @@ jobs:
           chmod +x am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh
           am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh dev
 
+      - name: Resolve Dev release name
+        id: release_dev
+        shell: bash
+        env:
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+        run: |
+          chmod +x am-pipelines-repo/scripts/ci/resolve-helm-release.sh
+          chmod +x am-pipelines-repo/scripts/ci/list-kind-overlays.sh
+          RELEASE=$(am-pipelines-repo/scripts/ci/resolve-helm-release.sh "$INPUT_IMAGE_NAME" dev)
+          BASE="${INPUT_IMAGE_NAME%-preprod}"
+          BASE="${BASE%-dev}"
+          BASE="${BASE%-prod}"
+          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "Dev Helm release: $RELEASE"
+
       - name: Deploy to Dev via Helm
         shell: bash
         env:
           INPUT_WORKING_DIRECTORY: ${{ inputs.working_directory }}
-          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
           INPUT_DEV_NAMESPACE: ${{ inputs.dev_namespace }}
           INPUT_REGISTRY: ${{ inputs.registry }}
           INPUT_LANGUAGE: ${{ inputs.language }}
+          RELEASE_NAME: ${{ steps.release_dev.outputs.release }}
+          IMAGE_BASE: ${{ steps.release_dev.outputs.base }}
           REPO_OWNER_RAW: ${{ github.repository_owner }}
           RUN_ID: ${{ github.run_id }}
         run: |
+          set -euo pipefail
           BASE_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.yaml"
           MAPPING_VALUES="$INPUT_WORKING_DIRECTORY/helm/vault-mappings.yaml"
           ENV_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.dev.yaml"
@@ -571,53 +599,81 @@ jobs:
             VALUES_ARG+=("-f" "$ENV_VALUES")
           fi
 
-          echo "🚀 [DEV] Deploying $INPUT_IMAGE_NAME → $INPUT_DEV_NAMESPACE"
+          OVERLAY_DIR="./am-pipelines-repo/helm/overlays/nonprod-kind"
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            if [ -f "$OVERLAY_DIR/$f" ]; then
+              VALUES_ARG+=("-f" "$OVERLAY_DIR/$f")
+            else
+              echo "WARN: missing $OVERLAY_DIR/$f"
+            fi
+          done < <(am-pipelines-repo/scripts/ci/list-kind-overlays.sh dev)
 
+          echo "🚀 [DEV] Deploying $RELEASE_NAME → $INPUT_DEV_NAMESPACE"
           REPO_OWNER=$(echo "$REPO_OWNER_RAW" | tr '[:upper:]' '[:lower:]')
 
-          helm upgrade --install "$INPUT_IMAGE_NAME" ./am-pipelines-repo/helm/universal-chart \
-            --namespace "$INPUT_DEV_NAMESPACE" \
-            --create-namespace \
-            --set global.image.registry="$INPUT_REGISTRY/$REPO_OWNER" \
-            --set global.image.tag="$RUN_ID" \
-            --set global.image.pullPolicy="Always" \
-            --set language="$INPUT_LANGUAGE" \
-            "${VALUES_ARG[@]}"
+          if helm status "$RELEASE_NAME" --namespace "$INPUT_DEV_NAMESPACE" >/dev/null 2>&1; then
+            echo "Existing release — helm --reuse-values + image tag only"
+            helm upgrade "$RELEASE_NAME" ./am-pipelines-repo/helm/universal-chart \
+              --namespace "$INPUT_DEV_NAMESPACE" \
+              --reuse-values \
+              --set global.image.registry="$INPUT_REGISTRY/$REPO_OWNER" \
+              --set global.image.repository="$IMAGE_BASE" \
+              --set global.image.tag="$RUN_ID" \
+              --set global.image.pullPolicy="Always"
+          else
+            echo "Helm values files: ${VALUES_ARG[*]}"
+            helm upgrade --install "$RELEASE_NAME" ./am-pipelines-repo/helm/universal-chart \
+              --namespace "$INPUT_DEV_NAMESPACE" \
+              --create-namespace \
+              --set global.image.registry="$INPUT_REGISTRY/$REPO_OWNER" \
+              --set global.image.repository="$IMAGE_BASE" \
+              --set global.image.tag="$RUN_ID" \
+              --set global.image.pullPolicy="Always" \
+              --set language="$INPUT_LANGUAGE" \
+              "${VALUES_ARG[@]}"
+          fi
 
       - name: Verify Dev Rollout
         shell: bash
         env:
           INPUT_DEV_NAMESPACE: ${{ inputs.dev_namespace }}
-          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+          RELEASE_NAME: ${{ steps.release_dev.outputs.release }}
         run: |
           ns="$INPUT_DEV_NAMESPACE"
-          dep="$INPUT_IMAGE_NAME"
+          dep="$RELEASE_NAME"
           echo "⏳ Waiting for rollout: $dep in $ns ..."
 
-          if ! kubectl rollout status deployment/$dep -n $ns --timeout=10m; then
+          if ! kubectl rollout status deployment/"$dep" -n "$ns" --timeout=10m; then
             echo "❌ Rollout FAILED for $dep"
-            kubectl get pods -n $ns
-            kubectl get events -n $ns --sort-by='.lastTimestamp' | tail -n 20
+            kubectl get pods -n "$ns"
+            kubectl get events -n "$ns" --sort-by='.lastTimestamp' | tail -n 20
             exit 1
           fi
           echo "✅ $dep is healthy in dev"
 
   # ============================================================
-  # DEPLOY — PREPROD (am-vps-nonprod / am-apps-preprod)
-  # Prefer runners labeled vps-nonprod; kubeconfig via KUBECONFIG_NONPROD
+  # DEPLOY — PREPROD (Kind / am-apps-preprod) via Helm
+  # Release must be image_name-preprod (matches Argo). Kind Vault =
+  # vault-preprod.asrax.in. On main, prefer gitops_write_preprod (Argo);
+  # set force_preprod_helm to Helm anyway.
   # ============================================================
   deploy-preprod:
     name: Deploy → Preprod
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
     runs-on: [self-hosted, linux, x64, docker, vps-nonprod]
-    # Proceed when security jobs succeeded OR were intentionally skipped by caller
     if: |
       always() &&
       inputs.image_name != '' && inputs.deploy_preprod == true &&
       needs.build.result == 'success' &&
       (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
       (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
-      (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
+      (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped') &&
+      (
+        inputs.force_preprod_helm == true ||
+        inputs.gitops_write_preprod != true ||
+        (github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master')
+      )
     environment: ${{ inputs.gh_env_preprod || format('preprod-{0}', inputs.image_name) }}
     permissions:
       contents: read
@@ -646,17 +702,55 @@ jobs:
           chmod +x am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh
           am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh preprod
 
+      - name: Resolve preprod release name
+        id: release
+        shell: bash
+        env:
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+        run: |
+          chmod +x am-pipelines-repo/scripts/ci/resolve-helm-release.sh
+          chmod +x am-pipelines-repo/scripts/ci/list-kind-overlays.sh
+          RELEASE=$(am-pipelines-repo/scripts/ci/resolve-helm-release.sh "$INPUT_IMAGE_NAME" preprod)
+          BASE="${INPUT_IMAGE_NAME%-preprod}"
+          BASE="${BASE%-dev}"
+          BASE="${BASE%-prod}"
+          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "Preprod Helm release: $RELEASE"
+
+      - name: Align Argo feature-branch (preprod)
+        if: github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master'
+        shell: bash
+        env:
+          INPUT_SERVICE_NAME: ${{ steps.release.outputs.base }}
+          INPUT_GIT_REF: ${{ github.ref_name }}
+        run: |
+          chmod +x am-pipelines-repo/scripts/ci/preprod-argo-align-feature-branch.sh
+          am-pipelines-repo/scripts/ci/preprod-argo-align-feature-branch.sh
+
+      - name: Preprod Argo toggle gate
+        shell: bash
+        env:
+          INPUT_SERVICE_NAME: ${{ steps.release.outputs.base }}
+          INPUT_GIT_REF: ${{ github.ref_name }}
+          INPUT_FORCE_HELM: ${{ inputs.force_preprod_helm }}
+        run: |
+          chmod +x am-pipelines-repo/scripts/ci/preprod-argo-gate.sh
+          am-pipelines-repo/scripts/ci/preprod-argo-gate.sh
+
       - name: Deploy to Preprod via Helm
         shell: bash
         env:
           INPUT_WORKING_DIRECTORY: ${{ inputs.working_directory }}
-          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
           INPUT_PREPROD_NAMESPACE: ${{ inputs.preprod_namespace }}
           INPUT_REGISTRY: ${{ inputs.registry }}
           INPUT_LANGUAGE: ${{ inputs.language }}
+          RELEASE_NAME: ${{ steps.release.outputs.release }}
+          IMAGE_BASE: ${{ steps.release.outputs.base }}
           REPO_OWNER_RAW: ${{ github.repository_owner }}
           RUN_ID: ${{ github.run_id }}
         run: |
+          set -euo pipefail
           BASE_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.yaml"
           MAPPING_VALUES="$INPUT_WORKING_DIRECTORY/helm/vault-mappings.yaml"
           ENV_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.preprod.yaml"
@@ -667,38 +761,64 @@ jobs:
           fi
           if [ -f "$MAPPING_VALUES" ]; then
             VALUES_ARG+=("-f" "$MAPPING_VALUES")
+          else
+            echo "WARN: missing $MAPPING_VALUES — Vault CSI mappings will not be applied"
           fi
           if [ -f "$ENV_VALUES" ]; then
             VALUES_ARG+=("-f" "$ENV_VALUES")
+          else
+            echo "WARN: missing $ENV_VALUES"
           fi
 
-          echo "🚀 [PREPROD] Deploying $INPUT_IMAGE_NAME → $INPUT_PREPROD_NAMESPACE"
+          OVERLAY_DIR="./am-pipelines-repo/helm/overlays/nonprod-kind"
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            if [ -f "$OVERLAY_DIR/$f" ]; then
+              VALUES_ARG+=("-f" "$OVERLAY_DIR/$f")
+            else
+              echo "WARN: missing $OVERLAY_DIR/$f"
+            fi
+          done < <(am-pipelines-repo/scripts/ci/list-kind-overlays.sh preprod)
 
+          echo "🚀 [PREPROD] Deploying $RELEASE_NAME → $INPUT_PREPROD_NAMESPACE (image tag=$RUN_ID)"
           REPO_OWNER=$(echo "$REPO_OWNER_RAW" | tr '[:upper:]' '[:lower:]')
 
-          helm upgrade --install "$INPUT_IMAGE_NAME" ./am-pipelines-repo/helm/universal-chart \
-            --namespace "$INPUT_PREPROD_NAMESPACE" \
-            --create-namespace \
-            --set global.image.registry="$INPUT_REGISTRY/$REPO_OWNER" \
-            --set global.image.tag="$RUN_ID" \
-            --set global.image.pullPolicy="Always" \
-            --set language="$INPUT_LANGUAGE" \
-            "${VALUES_ARG[@]}"
+          if helm status "$RELEASE_NAME" --namespace "$INPUT_PREPROD_NAMESPACE" >/dev/null 2>&1; then
+            echo "Existing release — helm --reuse-values + image tag only"
+            helm upgrade "$RELEASE_NAME" ./am-pipelines-repo/helm/universal-chart \
+              --namespace "$INPUT_PREPROD_NAMESPACE" \
+              --reuse-values \
+              --set global.image.registry="$INPUT_REGISTRY/$REPO_OWNER" \
+              --set global.image.repository="$IMAGE_BASE" \
+              --set global.image.tag="$RUN_ID" \
+              --set global.image.pullPolicy="Always"
+          else
+            echo "Helm values files: ${VALUES_ARG[*]}"
+            helm upgrade --install "$RELEASE_NAME" ./am-pipelines-repo/helm/universal-chart \
+              --namespace "$INPUT_PREPROD_NAMESPACE" \
+              --create-namespace \
+              --set global.image.registry="$INPUT_REGISTRY/$REPO_OWNER" \
+              --set global.image.repository="$IMAGE_BASE" \
+              --set global.image.tag="$RUN_ID" \
+              --set global.image.pullPolicy="Always" \
+              --set language="$INPUT_LANGUAGE" \
+              "${VALUES_ARG[@]}"
+          fi
 
       - name: Verify Preprod Rollout
         shell: bash
         env:
           INPUT_PREPROD_NAMESPACE: ${{ inputs.preprod_namespace }}
-          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+          RELEASE_NAME: ${{ steps.release.outputs.release }}
         run: |
           ns="$INPUT_PREPROD_NAMESPACE"
-          dep="$INPUT_IMAGE_NAME"
+          dep="$RELEASE_NAME"
           echo "⏳ Waiting for rollout: $dep in $ns ..."
 
-          if ! kubectl rollout status deployment/$dep -n $ns --timeout=10m; then
+          if ! kubectl rollout status deployment/"$dep" -n "$ns" --timeout=10m; then
             echo "❌ Rollout FAILED for $dep"
-            kubectl get pods -n $ns
-            kubectl get events -n $ns --sort-by='.lastTimestamp' | tail -n 20
+            kubectl get pods -n "$ns" -l "app.kubernetes.io/instance=$dep" -o wide || true
+            kubectl get events -n "$ns" --field-selector "involvedObject.name=$dep" --sort-by='.lastTimestamp' | tail -n 20 || true
             exit 1
           fi
           echo "✅ $dep is healthy in preprod"
@@ -708,11 +828,15 @@ jobs:
         shell: bash
         env:
           INPUT_PREPROD_NAMESPACE: ${{ inputs.preprod_namespace }}
-          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+          RELEASE_NAME: ${{ steps.release.outputs.release }}
         run: |
           echo "🔍 Preprod deployment failed. Diagnostics:"
           kubectl get pods -n "$INPUT_PREPROD_NAMESPACE" -o wide
-          kubectl describe deployment/"$INPUT_IMAGE_NAME" -n "$INPUT_PREPROD_NAMESPACE" 2>&1 | tail -n 30
+          kubectl describe deployment/"$RELEASE_NAME" -n "$INPUT_PREPROD_NAMESPACE" 2>&1 | tail -n 40
+          POD=$(kubectl get pods -n "$INPUT_PREPROD_NAMESPACE" -l "app.kubernetes.io/instance=$RELEASE_NAME" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+          if [ -n "$POD" ]; then
+            kubectl describe pod "$POD" -n "$INPUT_PREPROD_NAMESPACE" 2>&1 | tail -n 50
+          fi
 
   # ============================================================
   # DEPLOY — PROD (Contabo / am-apps-prod only)
@@ -758,17 +882,34 @@ jobs:
           chmod +x am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh
           am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh prod
 
+      - name: Resolve Prod release name
+        id: release_prod
+        shell: bash
+        env:
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+        run: |
+          chmod +x am-pipelines-repo/scripts/ci/resolve-helm-release.sh
+          RELEASE=$(am-pipelines-repo/scripts/ci/resolve-helm-release.sh "$INPUT_IMAGE_NAME" prod)
+          BASE="${INPUT_IMAGE_NAME%-preprod}"
+          BASE="${BASE%-dev}"
+          BASE="${BASE%-prod}"
+          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "Prod Helm release: $RELEASE (bare — no Kind overlays)"
+
       - name: Deploy to Prod via Helm
         shell: bash
         env:
           INPUT_WORKING_DIRECTORY: ${{ inputs.working_directory }}
-          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
           INPUT_PROD_NAMESPACE: ${{ inputs.prod_namespace }}
           INPUT_REGISTRY: ${{ inputs.registry }}
           INPUT_LANGUAGE: ${{ inputs.language }}
+          RELEASE_NAME: ${{ steps.release_prod.outputs.release }}
+          IMAGE_BASE: ${{ steps.release_prod.outputs.base }}
           REPO_OWNER_RAW: ${{ github.repository_owner }}
           RUN_ID: ${{ github.run_id }}
         run: |
+          set -euo pipefail
           BASE_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.yaml"
           MAPPING_VALUES="$INPUT_WORKING_DIRECTORY/helm/vault-mappings.yaml"
           ENV_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.prod.yaml"
@@ -784,33 +925,44 @@ jobs:
             VALUES_ARG+=("-f" "$ENV_VALUES")
           fi
 
-          echo "🚀 [PROD] Deploying $INPUT_IMAGE_NAME → $INPUT_PROD_NAMESPACE"
-
+          echo "🚀 [PROD] Deploying $RELEASE_NAME → $INPUT_PROD_NAMESPACE"
           REPO_OWNER=$(echo "$REPO_OWNER_RAW" | tr '[:upper:]' '[:lower:]')
 
-          helm upgrade --install "$INPUT_IMAGE_NAME" ./am-pipelines-repo/helm/universal-chart \
-            --namespace "$INPUT_PROD_NAMESPACE" \
-            --create-namespace \
-            --set global.image.registry="$INPUT_REGISTRY/$REPO_OWNER" \
-            --set global.image.tag="$RUN_ID" \
-            --set global.image.pullPolicy="Always" \
-            --set language="$INPUT_LANGUAGE" \
-            "${VALUES_ARG[@]}"
+          if helm status "$RELEASE_NAME" --namespace "$INPUT_PROD_NAMESPACE" >/dev/null 2>&1; then
+            echo "Existing release — helm --reuse-values + image tag only"
+            helm upgrade "$RELEASE_NAME" ./am-pipelines-repo/helm/universal-chart \
+              --namespace "$INPUT_PROD_NAMESPACE" \
+              --reuse-values \
+              --set global.image.registry="$INPUT_REGISTRY/$REPO_OWNER" \
+              --set global.image.repository="$IMAGE_BASE" \
+              --set global.image.tag="$RUN_ID" \
+              --set global.image.pullPolicy="Always"
+          else
+            helm upgrade --install "$RELEASE_NAME" ./am-pipelines-repo/helm/universal-chart \
+              --namespace "$INPUT_PROD_NAMESPACE" \
+              --create-namespace \
+              --set global.image.registry="$INPUT_REGISTRY/$REPO_OWNER" \
+              --set global.image.repository="$IMAGE_BASE" \
+              --set global.image.tag="$RUN_ID" \
+              --set global.image.pullPolicy="Always" \
+              --set language="$INPUT_LANGUAGE" \
+              "${VALUES_ARG[@]}"
+          fi
 
       - name: Verify Prod Rollout
         shell: bash
         env:
           INPUT_PROD_NAMESPACE: ${{ inputs.prod_namespace }}
-          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+          RELEASE_NAME: ${{ steps.release_prod.outputs.release }}
         run: |
           ns="$INPUT_PROD_NAMESPACE"
-          dep="$INPUT_IMAGE_NAME"
+          dep="$RELEASE_NAME"
           echo "⏳ Waiting for rollout: $dep in $ns ..."
 
-          if ! kubectl rollout status deployment/$dep -n $ns --timeout=10m; then
+          if ! kubectl rollout status deployment/"$dep" -n "$ns" --timeout=10m; then
             echo "❌ Rollout FAILED for $dep in prod"
-            kubectl get pods -n $ns
-            kubectl get events -n $ns --sort-by='.lastTimestamp' | tail -n 20
+            kubectl get pods -n "$ns"
+            kubectl get events -n "$ns" --sort-by='.lastTimestamp' | tail -n 20
             exit 1
           fi
           echo "✅ $dep is healthy in prod"
@@ -820,8 +972,8 @@ jobs:
         shell: bash
         env:
           INPUT_PROD_NAMESPACE: ${{ inputs.prod_namespace }}
-          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+          RELEASE_NAME: ${{ steps.release_prod.outputs.release }}
         run: |
           echo "🔍 Prod deployment failed. Diagnostics:"
           kubectl get pods -n "$INPUT_PROD_NAMESPACE" -o wide
-          kubectl describe deployment/"$INPUT_IMAGE_NAME" -n "$INPUT_PROD_NAMESPACE" 2>&1 | tail -n 30
+          kubectl describe deployment/"$RELEASE_NAME" -n "$INPUT_PROD_NAMESPACE" 2>&1 | tail -n 30

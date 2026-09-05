@@ -57,7 +57,7 @@ on:
 jobs:
   deploy:
     name: Deploy → ${{ inputs.environment }}
-    runs-on: ${{ inputs.environment == 'prod' && fromJSON('["self-hosted","linux","x64","docker","vps-prod"]') || fromJSON('["self-hosted","linux","x64","docker","vps-nonprod"]') }}
+    runs-on: ${{ inputs.environment == 'prod' && fromJSON('["self-hosted","linux","x64","docker","vps-prod"]') || (inputs.environment == 'preprod' && fromJSON('["self-hosted","linux","x64","docker","preprod"]') || fromJSON('["self-hosted","linux","x64","docker","dev"]')) }}
     environment: ${{ inputs.gh_environment || format('{0}-{1}', inputs.environment, inputs.service_name) }}
 
     steps:

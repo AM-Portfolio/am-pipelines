@@ -501,7 +501,7 @@ jobs:
 
   # ============================================================
   # DEPLOY — DEV (am-vps-nonprod / am-apps-dev)
-  # Prefer runners labeled vps-nonprod; kubeconfig via KUBECONFIG_NONPROD
+  # Runner label: "dev" (Kind nonprod host). kubeconfig via KUBECONFIG_NONPROD.
   # ============================================================
   deploy-dev:
     name: Deploy → Dev
@@ -514,8 +514,8 @@ jobs:
       (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
       (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
       (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
-    # Prefer a runner labeled vps-nonprod when available; kubeconfig gate enforces cluster.
-    runs-on: [self-hosted, linux, x64, docker, vps-nonprod]
+    # Kind nonprod runner is registered with label "dev" (and often "preprod").
+    runs-on: [self-hosted, linux, x64, docker, dev]
     environment: ${{ inputs.gh_env_dev || format('dev-{0}', inputs.image_name) }}
     permissions:
       contents: read
@@ -661,7 +661,7 @@ jobs:
   deploy-preprod:
     name: Deploy → Preprod
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
-    runs-on: [self-hosted, linux, x64, docker, vps-nonprod]
+    runs-on: [self-hosted, linux, x64, docker, preprod]
     if: |
       always() &&
       inputs.image_name != '' && inputs.deploy_preprod == true &&

@@ -35,6 +35,13 @@ argo_app_exists() {
   kubectl -n "$ARGO_NS" get application "$ARGO_APP" >/dev/null 2>&1
 }
 
+stamp_auto_sync_label() {
+  local state="$1" # enabled|disabled
+  kubectl -n "$ARGO_NS" label application "$ARGO_APP" \
+    "am.asrax.in/auto-sync=${state}" \
+    --overwrite >/dev/null 2>&1 || true
+}
+
 pause_argo_auto() {
   [[ "$PAUSE_ARGO" == "true" ]] || return 0
   if ! argo_app_exists; then
@@ -43,18 +50,23 @@ pause_argo_auto() {
   local auto
   auto=$(kubectl -n "$ARGO_NS" get application "$ARGO_APP" \
     -o jsonpath='{.spec.syncPolicy.automated}' 2>/dev/null || true)
+  # Always stamp ci-image + auto-sync label for Argo DETAILS visibility
+  kubectl -n "$ARGO_NS" annotate application "$ARGO_APP" \
+    "am.asrax.in/ci-image=${FULL_IMAGE}" \
+    --overwrite >/dev/null || true
   if [[ -z "$auto" || "$auto" == "null" || "$auto" == "{}" ]]; then
     echo "Argo Auto-Sync already off on $ARGO_APP"
+    stamp_auto_sync_label disabled
     return 0
   fi
   echo "Pausing Argo Auto-Sync on $ARGO_APP (CI image roll; restore Auto-Sync when done)"
   kubectl -n "$ARGO_NS" annotate application "$ARGO_APP" \
     "am.asrax.in/ci-paused-auto=true" \
-    "am.asrax.in/ci-image=${FULL_IMAGE}" \
     --overwrite >/dev/null || true
   kubectl -n "$ARGO_NS" patch application "$ARGO_APP" --type json \
     -p '[{"op":"remove","path":"/spec/syncPolicy/automated"}]' >/dev/null \
     || echo "WARN: could not remove syncPolicy.automated"
+  stamp_auto_sync_label disabled
 }
 
 bump_deploy_image() {

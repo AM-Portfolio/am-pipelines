@@ -713,6 +713,7 @@ jobs:
         env:
           INPUT_SERVICE_NAME: ${{ steps.release.outputs.base }}
           INPUT_GIT_REF: ${{ github.ref_name }}
+          INPUT_DEPLOYED_BY: ${{ github.actor }}
         run: |
           chmod +x am-pipelines-repo/scripts/ci/preprod-argo-align-feature-branch.sh
           am-pipelines-repo/scripts/ci/preprod-argo-align-feature-branch.sh

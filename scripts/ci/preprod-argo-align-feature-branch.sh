@@ -1,10 +1,25 @@
 #!/usr/bin/env bash
-# Align Kind Argo Application values targetRevision + feature-branch annotations.
+# Align Kind Argo Application values targetRevision + feature-branch labels/annotations.
 # Env: INPUT_SERVICE_NAME, INPUT_GIT_REF
+# Optional: INPUT_DEPLOYED_BY (github.actor / local user — shown in Argo Labels)
 set -euo pipefail
 
 APP="${INPUT_SERVICE_NAME}-preprod"
 REF="${INPUT_GIT_REF:?INPUT_GIT_REF required}"
+DEPLOYED_BY="${INPUT_DEPLOYED_BY:-}"
+
+# K8s label values: DNS-ish, max 63
+label_safe() {
+  local v="${1:-none}"
+  v="${v//\//_}"
+  v="${v//\\/_}"
+  v="$(echo "$v" | tr -c 'A-Za-z0-9_.-' '_' | cut -c1-63)"
+  [[ -n "$v" ]] || v="none"
+  echo "$v"
+}
+
+REF_LABEL="$(label_safe "$REF")"
+BY_LABEL="$(label_safe "${DEPLOYED_BY:-unknown}")"
 
 if ! kubectl -n argocd get application "$APP" >/dev/null 2>&1; then
   echo "WARN: Application $APP missing — skip Argo align"
@@ -33,13 +48,26 @@ if [[ "$IDX" == "-1" ]]; then
   exit 1
 fi
 
-kubectl -n argocd annotate application "$APP" \
-  "am.asrax.in/feature-branch-enabled=true" \
-  "am.asrax.in/feature-branch=${REF}" \
-  --overwrite
+# Annotations: full branch name + owner (slashes OK)
+ANN_ARGS=(
+  "am.asrax.in/feature-branch-enabled=true"
+  "am.asrax.in/feature-branch=${REF}"
+)
+if [[ -n "$DEPLOYED_BY" ]]; then
+  ANN_ARGS+=("am.asrax.in/deployed-by=${DEPLOYED_BY}")
+fi
+kubectl -n argocd annotate application "$APP" "${ANN_ARGS[@]}" --overwrite
+
+# Labels: visible in Argo DETAILS → Labels (Target Revision stays chart main)
+LABEL_ARGS=(
+  "am.asrax.in/feature-branch=enabled"
+  "am.asrax.in/feature-branch-ref=${REF_LABEL}"
+  "am.asrax.in/deployed-by=${BY_LABEL}"
+)
+kubectl -n argocd label application "$APP" "${LABEL_ARGS[@]}" --overwrite
 
 kubectl -n argocd patch application "$APP" --type json \
   -p "[{\"op\":\"replace\",\"path\":\"/spec/sources/${IDX}/targetRevision\",\"value\":\"${REF}\"}]"
 
 kubectl -n argocd annotate application "$APP" "argocd.argoproj.io/refresh=hard" --overwrite
-echo "OK: $APP feature-branch enabled → values revision=$REF"
+echo "OK: $APP feature-branch enabled → values revision=$REF deployed-by=${DEPLOYED_BY:-unknown}"

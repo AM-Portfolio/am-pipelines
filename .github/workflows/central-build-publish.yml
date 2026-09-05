@@ -92,6 +92,21 @@ on:
         type: boolean
         default: false
         description: "Force Docker to build without using cache"
+      gitops_write_preprod:
+        required: false
+        type: boolean
+        default: false
+        description: "Auto-commit image tag/digest to AM-Portfolio/am-gitops preprod/image-tags (Argo). Needs GITHUB_PAT with contents:write on am-gitops."
+      gitops_values_repo:
+        required: false
+        type: string
+        default: ""
+        description: "Service values repo URL for freeze (default: caller github.repository)"
+      gitops_values_path:
+        required: false
+        type: string
+        default: ""
+        description: "Path under values repo to helm/ (default: working_directory)"
     secrets:
       KUBECONFIG_NONPROD:
         required: false
@@ -166,6 +181,10 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      image_digest: ${{ steps.push.outputs.digest }}
+      image_tag: ${{ steps.push.outputs.tag }}
+      image_repository: ${{ steps.push.outputs.repository }}
     defaults:
       run:
         working-directory: ${{ inputs.working_directory }}
@@ -297,6 +316,7 @@ jobs:
           password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Build and Push Docker Image
+        id: push
         if: ${{ inputs.image_name != '' }}
         env:
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
@@ -305,6 +325,7 @@ jobs:
           IMAGE_ID=$(echo $IMAGE_ID | tr '[A-Z]' '[a-z]')
           BASE_REG="ghcr.io/${{ github.repository_owner }}/"
           BASE_REG=$(echo $BASE_REG | tr '[A-Z]' '[a-z]')
+          TAG="${{ github.run_id }}"
 
           echo "Building $IMAGE_ID ..."
           CACHE_ARG=""
@@ -317,13 +338,120 @@ jobs:
             --build-arg GITHUB_PACKAGES_USERNAME=${{ github.actor }} \
             --build-arg GITHUB_PACKAGES_TOKEN=${GHCR_TOKEN} \
             --build-arg BUILD_ID=${{ github.run_id }} \
-            -t $IMAGE_ID:${{ github.run_id }} \
+            -t $IMAGE_ID:$TAG \
             -t $IMAGE_ID:latest \
             ${{ inputs.build_context }}
 
           echo "Pushing $IMAGE_ID ..."
-          docker push $IMAGE_ID:${{ github.run_id }}
+          docker push $IMAGE_ID:$TAG
           docker push $IMAGE_ID:latest
+
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE_ID:$TAG" | awk -F@ '{print $2}')
+          echo "repository=$IMAGE_ID" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+  # ============================================================
+  # GITOPS — auto-commit preprod image-tags to am-gitops (Argo)
+  # Requires org GITHUB_PAT (or GHCR_TOKEN) with contents:write on am-gitops.
+  # ============================================================
+  gitops-preprod:
+    name: GitOps → Preprod image-tags
+    needs: [build, vulnerability-scan, misconfig-scan, security-scan]
+    runs-on: ubuntu-latest
+    if: |
+      always() &&
+      inputs.image_name != '' &&
+      inputs.gitops_write_preprod == true &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') &&
+      needs.build.result == 'success' &&
+      (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
+      (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
+      (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout am-gitops
+        uses: actions/checkout@v4
+        with:
+          repository: AM-Portfolio/am-gitops
+          ref: main
+          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          path: am-gitops
+
+      - name: Resolve chart SHA
+        id: chart
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          SHA=$(gh api repos/AM-Portfolio/am-pipelines/commits/main --jq .sha)
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Write freeze + image-tags
+        env:
+          SVC: ${{ inputs.image_name }}
+          DIGEST: ${{ needs.build.outputs.image_digest }}
+          TAG: ${{ needs.build.outputs.image_tag }}
+          REPO: ${{ needs.build.outputs.image_repository }}
+          CHART_SHA: ${{ steps.chart.outputs.sha }}
+          SOURCE_SHA: ${{ github.sha }}
+          VALUES_REPO_INPUT: ${{ inputs.gitops_values_repo }}
+          VALUES_PATH_INPUT: ${{ inputs.gitops_values_path }}
+          WORKING_DIRECTORY: ${{ inputs.working_directory }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          VALUES_REPO="${VALUES_REPO_INPUT:-https://github.com/${GITHUB_REPOSITORY}.git}"
+          VALUES_PATH="${VALUES_PATH_INPUT:-${WORKING_DIRECTORY}}"
+          mkdir -p "am-gitops/releases/preprod" "am-gitops/preprod/image-tags"
+          {
+            echo "# CI-written freeze — do not hand-edit for enrolled services"
+            echo "image:"
+            echo "  repository: ${REPO}"
+            echo "  digest: ${DIGEST}"
+            echo "  tag: \"${TAG}\""
+            echo "chart:"
+            echo "  repoURL: https://github.com/AM-Portfolio/am-pipelines.git"
+            echo "  path: helm/universal-chart"
+            echo "  targetRevision: \"${CHART_SHA}\""
+            echo "values:"
+            echo "  repoURL: ${VALUES_REPO}"
+            echo "  targetRevision: \"${SOURCE_SHA}\""
+            echo "  files:"
+            echo "    - ${VALUES_PATH}/helm/values.yaml"
+            echo "    - ${VALUES_PATH}/helm/vault-mappings.yaml"
+            echo "    - ${VALUES_PATH}/helm/values.preprod.yaml"
+            echo "sourceCommit: \"${SOURCE_SHA}\""
+          } > "am-gitops/releases/preprod/${SVC}.yaml"
+          {
+            echo "# Synced from releases/preprod/${SVC}.yaml (CI auto-commit)"
+            echo "global:"
+            echo "  image:"
+            if [ -n "${DIGEST}" ]; then
+              echo "    digest: \"${DIGEST}\""
+            fi
+            echo "    tag: \"${TAG}\""
+            echo "    imagePullSecrets:"
+            echo "      - name: ghcr-creds"
+          } > "am-gitops/preprod/image-tags/${SVC}.yaml"
+
+      - name: Commit and push
+        working-directory: am-gitops
+        env:
+          SVC: ${{ inputs.image_name }}
+          DIGEST: ${{ needs.build.outputs.image_digest }}
+          TAG: ${{ needs.build.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "am-gitops-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "releases/preprod/${SVC}.yaml" "preprod/image-tags/${SVC}.yaml"
+          if git diff --cached --quiet; then
+            echo "No gitops changes"
+            exit 0
+          fi
+          git commit -m "freeze(preprod/${SVC}): ${TAG}"
+          git push origin HEAD:main
 
   # ============================================================
   # VULNERABILITY SCAN — GitHub-hosted runner

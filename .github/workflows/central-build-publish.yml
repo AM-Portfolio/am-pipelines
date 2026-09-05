@@ -611,28 +611,17 @@ jobs:
 
           echo "🚀 [DEV] Deploying $RELEASE_NAME → $INPUT_DEV_NAMESPACE"
           REPO_OWNER=$(echo "$REPO_OWNER_RAW" | tr '[:upper:]' '[:lower:]')
-
-          if helm status "$RELEASE_NAME" --namespace "$INPUT_DEV_NAMESPACE" >/dev/null 2>&1; then
-            echo "Existing release — helm --reuse-values + image tag only"
-            helm upgrade "$RELEASE_NAME" ./am-pipelines-repo/helm/universal-chart \
-              --namespace "$INPUT_DEV_NAMESPACE" \
-              --reuse-values \
-              --set global.image.registry="$INPUT_REGISTRY/$REPO_OWNER" \
-              --set global.image.repository="$IMAGE_BASE" \
-              --set global.image.tag="$RUN_ID" \
-              --set global.image.pullPolicy="Always"
-          else
-            echo "Helm values files: ${VALUES_ARG[*]}"
-            helm upgrade --install "$RELEASE_NAME" ./am-pipelines-repo/helm/universal-chart \
-              --namespace "$INPUT_DEV_NAMESPACE" \
-              --create-namespace \
-              --set global.image.registry="$INPUT_REGISTRY/$REPO_OWNER" \
-              --set global.image.repository="$IMAGE_BASE" \
-              --set global.image.tag="$RUN_ID" \
-              --set global.image.pullPolicy="Always" \
-              --set language="$INPUT_LANGUAGE" \
-              "${VALUES_ARG[@]}"
-          fi
+          chmod +x am-pipelines-repo/scripts/ci/bump-release-image.sh
+          export RELEASE_NAME NAMESPACE="$INPUT_DEV_NAMESPACE"
+          export IMAGE_REGISTRY="$INPUT_REGISTRY/$REPO_OWNER"
+          export IMAGE_REPOSITORY="$IMAGE_BASE"
+          export IMAGE_TAG="$RUN_ID"
+          export LANGUAGE="$INPUT_LANGUAGE"
+          export CHART_DIR="./am-pipelines-repo/helm/universal-chart"
+          export PAUSE_ARGO=true
+          export ARGO_APP="$RELEASE_NAME"
+          echo "Helm values files (fresh install only): ${VALUES_ARG[*]}"
+          am-pipelines-repo/scripts/ci/bump-release-image.sh -- "${VALUES_ARG[@]}"
 
       - name: Verify Dev Rollout
         shell: bash
@@ -916,27 +905,18 @@ jobs:
 
           echo "🚀 [PROD] Deploying $RELEASE_NAME → $INPUT_PROD_NAMESPACE"
           REPO_OWNER=$(echo "$REPO_OWNER_RAW" | tr '[:upper:]' '[:lower:]')
-
-          if helm status "$RELEASE_NAME" --namespace "$INPUT_PROD_NAMESPACE" >/dev/null 2>&1; then
-            echo "Existing release — helm --reuse-values + image tag only"
-            helm upgrade "$RELEASE_NAME" ./am-pipelines-repo/helm/universal-chart \
-              --namespace "$INPUT_PROD_NAMESPACE" \
-              --reuse-values \
-              --set global.image.registry="$INPUT_REGISTRY/$REPO_OWNER" \
-              --set global.image.repository="$IMAGE_BASE" \
-              --set global.image.tag="$RUN_ID" \
-              --set global.image.pullPolicy="Always"
-          else
-            helm upgrade --install "$RELEASE_NAME" ./am-pipelines-repo/helm/universal-chart \
-              --namespace "$INPUT_PROD_NAMESPACE" \
-              --create-namespace \
-              --set global.image.registry="$INPUT_REGISTRY/$REPO_OWNER" \
-              --set global.image.repository="$IMAGE_BASE" \
-              --set global.image.tag="$RUN_ID" \
-              --set global.image.pullPolicy="Always" \
-              --set language="$INPUT_LANGUAGE" \
-              "${VALUES_ARG[@]}"
-          fi
+          chmod +x am-pipelines-repo/scripts/ci/bump-release-image.sh
+          export RELEASE_NAME NAMESPACE="$INPUT_PROD_NAMESPACE"
+          export IMAGE_REGISTRY="$INPUT_REGISTRY/$REPO_OWNER"
+          export IMAGE_REPOSITORY="$IMAGE_BASE"
+          export IMAGE_TAG="$RUN_ID"
+          export LANGUAGE="$INPUT_LANGUAGE"
+          export CHART_DIR="./am-pipelines-repo/helm/universal-chart"
+          # Prod Contabo Argo: pause auto only for explicit force rolls; default pause on to avoid selfHeal fight
+          export PAUSE_ARGO=true
+          export ARGO_APP="$RELEASE_NAME"
+          echo "Helm values files (fresh install only): ${VALUES_ARG[*]}"
+          am-pipelines-repo/scripts/ci/bump-release-image.sh -- "${VALUES_ARG[@]}"
 
       - name: Verify Prod Rollout
         shell: bash

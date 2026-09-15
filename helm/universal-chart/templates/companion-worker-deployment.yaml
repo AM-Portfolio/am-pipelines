@@ -3,8 +3,12 @@
 {{- $fullname := include "universal-chart.fullname" . }}
 {{- $suffix := default "worker" $cw.nameSuffix }}
 {{- $vaultEnabled := or .Values.global.vault.enabled (and .Values.vault .Values.vault.enabled | default false) }}
-{{- $vaultCsiEnabled := and $vaultEnabled (or .Values.global.vault.csi.enabled (and .Values.vault .Values.vault.csi .Values.vault.csi.enabled | default false)) }}
-{{- $vaultSecrets := merge (default (dict) .Values.global.vault.secrets) (and .Values.vault .Values.vault.secretPaths | default (dict)) }}
+{{- $gVault := .Values.global.vault | default dict }}
+{{- $gCsi := $gVault.csi | default dict }}
+{{- $vVault := .Values.vault | default dict }}
+{{- $vCsi := $vVault.csi | default dict }}
+{{- $vaultCsiEnabled := and $vaultEnabled (or ($gCsi.enabled | default false) ($vCsi.enabled | default false)) }}
+{{- $vaultSecrets := merge (default (dict) $gVault.secrets) (and .Values.vault .Values.vault.secretPaths | default (dict)) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

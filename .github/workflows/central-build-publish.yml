@@ -713,7 +713,7 @@ jobs:
         shell: bash
         env:
           INPUT_WORKING_DIRECTORY: ${{ inputs.working_directory }}
-          INPUT_GIT_REF: ${{ github.ref_name }}
+          INPUT_GIT_REF: ${{ github.head_ref || github.ref_name }}
           IMAGE_TAG: ${{ github.run_id }}
         run: |
           chmod +x am-pipelines-repo/scripts/ci/write-and-push-ci-image.sh
@@ -724,7 +724,7 @@ jobs:
         shell: bash
         env:
           INPUT_SERVICE_NAME: ${{ steps.release.outputs.base }}
-          INPUT_GIT_REF: ${{ github.ref_name }}
+          INPUT_GIT_REF: ${{ github.head_ref || github.ref_name }}
           INPUT_DEPLOYED_BY: ${{ github.actor }}
         run: |
           chmod +x am-pipelines-repo/scripts/ci/preprod-argo-align-feature-branch.sh
@@ -734,7 +734,7 @@ jobs:
         shell: bash
         env:
           INPUT_SERVICE_NAME: ${{ steps.release.outputs.base }}
-          INPUT_GIT_REF: ${{ github.ref_name }}
+          INPUT_GIT_REF: ${{ github.head_ref || github.ref_name }}
           INPUT_FORCE_HELM: ${{ inputs.force_preprod_helm }}
         run: |
           chmod +x am-pipelines-repo/scripts/ci/preprod-argo-gate.sh

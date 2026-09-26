@@ -1,6 +1,6 @@
-#!/usr/bin/env bash
 # Argo CD REST helpers for GitHub Actions (no kubeconfig).
-# Env: ARGOCD_AUTH_TOKEN (required), ARGOCD_SERVER (default https://argocd.asrax.in)
+# Contabo only (prod/DR): ARGOCD_AUTH_TOKEN + ARGOCD_SERVER (default https://argocd.asrax.in)
+# Preprod/dev: do not call these helpers — no Contabo Applications for nonprod.
 # Usage: source this file, then argo_api METHOD PATH [JSON_BODY]
 set -euo pipefail
 

@@ -61,8 +61,8 @@ on:
         type: boolean
         default: true
         description: >-
-          Feature-branch: push ci-image + Argo API valuesRev/sync (needs ARGOCD_AUTH_TOKEN).
-          On main/master: no-op when gitops_write_preprod (Argo owns the roll via pin commit).
+          Feature-branch: push ci-image.yaml only (no Argo — Contabo is prod/DR only).
+          Deploy nonprod locally with am deploy. On main/master: no-op when gitops_write_preprod.
       force_preprod_helm:
         required: false
         type: boolean
@@ -110,13 +110,12 @@ on:
       gitops_write_preprod:
         required: false
         type: boolean
-        # Default on: every main/master build bumps am-gitops so Argo preprod tracks the new image.
-        # Still gated by job if: only runs on main/master. Set false to opt out.
+        # Default on: every main/master build bumps am-gitops pins (SoT / promote input).
+        # No Argo sync for preprod — Contabo Argo is prod+DR only. Deploy nonprod via local am deploy.
         default: true
         description: >-
           Auto-commit image tag/digest to AM-Portfolio/am-gitops preprod/image-tags + releases/preprod
-          (Argo deploys). Default true on main/master. Needs GITHUB_PAT contents:write on am-gitops.
-          Never needs kubeconfig.
+          (pin SoT only; no Argo). Default true on main/master. Needs GITHUB_PAT contents:write on am-gitops.
       gitops_values_repo:
         required: false
         type: string
@@ -131,11 +130,10 @@ on:
       ARGOCD_AUTH_TOKEN:
         required: false
         description: >-
-          Argo CD API token for feature-branch refresh/sync (preferred). No kubeconfig.
-          Also set on am-gitops for argo-sync-on-tags after pin pushes.
+          Contabo Argo CD API token (prod/DR sync via am-gitops argo-sync-on-tags). Not used for preprod/dev.
       ARGOCD_SERVER:
         required: false
-        description: "Argo CD base URL (default https://argocd.asrax.in)"
+        description: "Contabo Argo CD base URL (default https://argocd.asrax.in)"
       KUBECONFIG_NONPROD:
         required: false
         description: "DEPRECATED — refused by CI. Do not store kubeconfig in GitHub. Use Argo API."
@@ -380,7 +378,7 @@ jobs:
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 
   # ============================================================
-  # GITOPS — auto-commit preprod image-tags to am-gitops (Argo)
+  # GITOPS — auto-commit preprod image-tags to am-gitops (pin SoT only; no Argo)
   # Requires org GITHUB_PAT (or GHCR_TOKEN) with contents:write on am-gitops.
   # ============================================================
   gitops-preprod:
@@ -516,10 +514,11 @@ jobs:
           exit-code: "0" # Non-blocking (reports but continues)
 
   # ============================================================
-  # PREPROD FEATURE BRANCH — ci-image + Argo API (no kubeconfig)
+  # PREPROD FEATURE BRANCH — ci-image only (no Argo; Contabo = prod/DR)
+  # Deploy with local: am deploy --env preprod --ref <branch>
   # ============================================================
   preprod-feature-argo:
-    name: Preprod feature → Argo API
+    name: Preprod feature → ci-image (no Argo)
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
     runs-on: ubuntu-latest
     if: |
@@ -548,17 +547,6 @@ jobs:
           ref: main
           token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
-      - name: Resolve service base name
-        id: release
-        shell: bash
-        env:
-          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
-        run: |
-          BASE="${INPUT_IMAGE_NAME%-preprod}"
-          BASE="${BASE%-dev}"
-          BASE="${BASE%-prod}"
-          echo "base=$BASE" >> "$GITHUB_OUTPUT"
-
       - name: Push ci-image.yaml on feature branch
         shell: bash
         env:
@@ -569,21 +557,10 @@ jobs:
           chmod +x am-pipelines-repo/scripts/ci/write-and-push-ci-image.sh
           am-pipelines-repo/scripts/ci/write-and-push-ci-image.sh
 
-      - name: Align + sync feature branch via Argo API
-        shell: bash
-        env:
-          INPUT_SERVICE_NAME: ${{ steps.release.outputs.base }}
-          INPUT_GIT_REF: ${{ github.head_ref || github.ref_name }}
-          INPUT_DEPLOYED_BY: ${{ github.actor }}
-          ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
-          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
+      - name: Notice — no Argo for preprod
         run: |
-          set -euo pipefail
-          chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh
-          chmod +x am-pipelines-repo/scripts/ci/preprod-argo-align-feature-branch-api.sh
-          chmod +x am-pipelines-repo/scripts/ci/preprod-argo-ensure-auto-api.sh
-          am-pipelines-repo/scripts/ci/preprod-argo-align-feature-branch-api.sh
-          am-pipelines-repo/scripts/ci/preprod-argo-ensure-auto-api.sh
+          echo "::notice::ci-image pushed. Contabo Argo is prod+DR only."
+          echo "::notice::Deploy nonprod locally: am deploy --env preprod --ref ${{ github.head_ref || github.ref_name }}"
 
   # ============================================================
   # PREPROD Helm BREAK-GLASS only (force_preprod_helm)

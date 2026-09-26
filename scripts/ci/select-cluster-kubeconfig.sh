@@ -1,85 +1,50 @@
 #!/usr/bin/env bash
-# Select kubeconfig for CI Helm rolls.
+# Select kubeconfig for BREAK-GLASS Helm only (force_preprod_helm / legacy).
+# Fleet enrolled services must NOT use this — use Argo API sync instead.
+#
 # Usage: select-cluster-kubeconfig.sh <dev|preprod|prod>
-# Env: KUBECONFIG_NONPROD_B64, KUBECONFIG_PROD_B64 (optional base64 kubeconfigs)
+# Policy: refuse GitHub-stored base64 kubeconfigs (KUBECONFIG_*_B64).
+# Only runner-local KUBECONFIG file is allowed for break-glass.
 set -euo pipefail
 
-ENV="${1:?usage: $0 <dev|preprod|prod>}"
+ROLE="${1:?usage: select-cluster-kubeconfig.sh <dev|preprod|prod>}"
 
-case "$ENV" in
+case "$ROLE" in
   dev|preprod)
-    ROLE=nonprod
-    EXPECT_NS="am-apps-${ENV}"
-    B64="${KUBECONFIG_NONPROD_B64:-}"
-    SECRET_NAME=KUBECONFIG_NONPROD
+    if [[ -n "${KUBECONFIG_NONPROD_B64:-}" ]]; then
+      echo "::error::Refuse GitHub secret KUBECONFIG_NONPROD. Fleet deploy uses Argo API only."
+      echo "::error::For break-glass Helm, mount kubeconfig on the self-hosted runner (KUBECONFIG file), never as a repo secret."
+      exit 1
+    fi
     ;;
   prod)
-    ROLE=prod
-    EXPECT_NS=am-apps-prod
-    B64="${KUBECONFIG_PROD_B64:-}"
-    SECRET_NAME=KUBECONFIG_PROD
+    if [[ -n "${KUBECONFIG_PROD_B64:-}" ]]; then
+      echo "::error::Refuse GitHub secret KUBECONFIG_PROD. Prod deploys via promote PR + Argo sync only."
+      echo "::error::Do not store Contabo kubeconfig in GitHub."
+      exit 1
+    fi
     ;;
   *)
-    echo "Unsupported environment: $ENV (expected dev|preprod|prod)"
+    echo "Unknown role: $ROLE (expected dev|preprod|prod)"
     exit 1
     ;;
 esac
 
 OUT="${RUNNER_TEMP:-/tmp}/kubeconfig-${ROLE}-$$"
-if [ -n "${B64}" ]; then
-  echo "$B64" | base64 -d > "$OUT"
-  chmod 600 "$OUT"
-  echo "Wrote kubeconfig from secret ${SECRET_NAME}"
-elif [ -n "${KUBECONFIG:-}" ] && [ -f "${KUBECONFIG}" ]; then
+if [ -n "${KUBECONFIG:-}" ] && [ -f "${KUBECONFIG}" ]; then
   cp "$KUBECONFIG" "$OUT"
-  chmod 600 "$OUT"
-  echo "Reusing runner KUBECONFIG=${KUBECONFIG}"
-elif [ -f "${HOME}/.kube/config" ]; then
-  cp "${HOME}/.kube/config" "$OUT"
-  chmod 600 "$OUT"
-  echo "Reusing ~/.kube/config (runner must be on ${ROLE} VPS)"
+  echo "Break-glass: reusing runner-local KUBECONFIG=${KUBECONFIG}"
 else
-  echo "No kubeconfig for ${ROLE}."
-  echo "Set GitHub Actions secret ${SECRET_NAME} (base64 kubeconfig),"
-  echo "or run this job on a self-hosted runner labeled for that cluster"
-  echo "(vps-nonprod for dev/preprod, vps-prod for prod)."
+  echo "::error::No runner-local kubeconfig for ${ROLE}."
+  echo "Fleet path: pin in am-gitops + Argo API (ARGOCD_AUTH_TOKEN). Do not put kubeconfig in GitHub secrets."
   exit 1
 fi
 
+chmod 600 "$OUT"
 export KUBECONFIG="$OUT"
-SERVER=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || true)
-CONTEXT=$(kubectl config current-context 2>/dev/null || true)
-echo "cluster_role=${ROLE}"
-echo "context=${CONTEXT}"
-echo "server=${SERVER}"
-
-if [ "$ROLE" = "nonprod" ]; then
-  if echo "$SERVER" | grep -Eq '203\.174\.22\.129:6443'; then
-    echo "Refusing nonprod deploy against Contabo prod API (${SERVER})."
-    echo "Point KUBECONFIG_NONPROD at am-vps-nonprod (ITSmart Kind)."
-    exit 1
-  fi
-  if ! kubectl get ns "$EXPECT_NS" >/dev/null 2>&1; then
-    echo "Cannot access namespace ${EXPECT_NS} on this cluster (server=${SERVER})."
-    exit 1
-  fi
-else
-  if ! kubectl get ns am-apps-prod >/dev/null 2>&1; then
-    echo "Cannot access namespace am-apps-prod on prod kubeconfig (server=${SERVER})."
-    exit 1
-  fi
-  if echo "$SERVER" | grep -Eq '127\.0\.0\.1:16443|localhost:16443'; then
-    echo "Refusing prod deploy against Kind localhost API (${SERVER})."
-    exit 1
-  fi
-fi
-
 if [ -n "${GITHUB_ENV:-}" ]; then
   echo "KUBECONFIG=${OUT}" >> "$GITHUB_ENV"
 fi
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
-  echo "cluster_role=${ROLE}" >> "$GITHUB_OUTPUT"
   echo "kubeconfig_path=${OUT}" >> "$GITHUB_OUTPUT"
 fi
-
-echo "Selected ${ROLE} cluster for ${ENV} (ns ok: ${EXPECT_NS})"

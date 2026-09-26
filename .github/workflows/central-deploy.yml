@@ -49,10 +49,16 @@ on:
     secrets:
       KUBECONFIG_NONPROD:
         required: false
-        description: "Base64 kubeconfig for am-vps-nonprod (dev + preprod)"
+        description: "DEPRECATED — refused. Use Argo API / am gitops; never store kubeconfig in GitHub."
       KUBECONFIG_PROD:
         required: false
-        description: "Base64 kubeconfig for Contabo prod (prod only)"
+        description: "DEPRECATED — refused. Prod = promote PR + Argo sync only."
+      ARGOCD_AUTH_TOKEN:
+        required: false
+        description: "Preferred for preprod feature align (if this workflow gains Argo-API path)."
+      ARGOCD_SERVER:
+        required: false
+        description: "Argo CD URL (default https://argocd.asrax.in)"
 
 jobs:
   deploy:

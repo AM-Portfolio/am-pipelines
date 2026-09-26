@@ -67,6 +67,10 @@ spec:
       serviceAccountName: {{ and .Values.vault .Values.vault.serviceAccountName | default .Values.global.vault.serviceAccountName | default (printf "%s-vault-sa" $fullname) }}
       {{- end }}
       automountServiceAccountToken: {{ if $vaultEnabled }}true{{ else }}{{ .Values.security.automountServiceAccountToken | default false }}{{ end }}
+      {{- with .Values.hostAliases }}
+      hostAliases:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000

@@ -43,28 +43,33 @@ on:
       deploy_dev:
         required: false
         type: boolean
-        default: true
-        description: "Set to true to enable the dev deployment stage automatically"
+        # Dev is manual: use am gitops set-tag / set-image-tag.yml or feature valuesRev — not CI Helm.
+        default: false
+        description: >-
+          Legacy break-glass Helm to Kind dev (requires runner-local kubeconfig).
+          Default false — prefer am gitops set-tag --env dev + Argo sync (no kubeconfig in GitHub).
       deploy_prod:
         required: false
         type: boolean
-        default: true
-        description: "Set to true to enable the prod deployment stage (parallel with preprod)"
+        # Prod is promote PR + Argo only. Never default-on Helm from service CI.
+        default: false
+        description: >-
+          Legacy break-glass Helm to Contabo prod. Default false — use am gitops promote + Argo.
+          Do not store Contabo kubeconfig in GitHub.
       deploy_preprod:
         required: false
         type: boolean
         default: true
         description: >-
-          Helm roll to Kind preprod (release = image_name-preprod + Kind Vault overlays).
-          On main/master this is skipped when gitops_write_preprod is true (Argo owns the roll)
-          unless force_preprod_helm is set. Feature branches always Helm when this is true.
+          Feature-branch: push ci-image + Argo API valuesRev/sync (needs ARGOCD_AUTH_TOKEN).
+          On main/master: no-op when gitops_write_preprod (Argo owns the roll via pin commit).
       force_preprod_helm:
         required: false
         type: boolean
         default: false
         description: >-
-          Preprod only: run Helm on main/master even when gitops_write_preprod is true,
-          and allow Helm while Argo Auto-Sync is on (selfHeal may revert values).
+          Break-glass only: Helm roll on a self-hosted runner with local kubeconfig.
+          Refuses GitHub-stored kubeconfig secrets. Prefer Argo API.
       skip_security_scan:
         required: false
         type: boolean
@@ -108,7 +113,10 @@ on:
         # Default on: every main/master build bumps am-gitops so Argo preprod tracks the new image.
         # Still gated by job if: only runs on main/master. Set false to opt out.
         default: true
-        description: "Auto-commit image tag/digest to AM-Portfolio/am-gitops preprod/image-tags (Argo). Default true. Needs GITHUB_PAT with contents:write on am-gitops."
+        description: >-
+          Auto-commit image tag/digest to AM-Portfolio/am-gitops preprod/image-tags + releases/preprod
+          (Argo deploys). Default true on main/master. Needs GITHUB_PAT contents:write on am-gitops.
+          Never needs kubeconfig.
       gitops_values_repo:
         required: false
         type: string
@@ -120,12 +128,20 @@ on:
         default: ""
         description: "Path under values repo to helm/ (default: working_directory)"
     secrets:
+      ARGOCD_AUTH_TOKEN:
+        required: false
+        description: >-
+          Argo CD API token for feature-branch refresh/sync (preferred). No kubeconfig.
+          Also set on am-gitops for argo-sync-on-tags after pin pushes.
+      ARGOCD_SERVER:
+        required: false
+        description: "Argo CD base URL (default https://argocd.asrax.in)"
       KUBECONFIG_NONPROD:
         required: false
-        description: "Base64 kubeconfig for am-vps-nonprod (dev + preprod Helm rolls)"
+        description: "DEPRECATED — refused by CI. Do not store kubeconfig in GitHub. Use Argo API."
       KUBECONFIG_PROD:
         required: false
-        description: "Base64 kubeconfig for Contabo prod cluster (prod Helm rolls only)"
+        description: "DEPRECATED — refused by CI. Prod = promote + Argo only."
 
 jobs:
   # ============================================================
@@ -374,7 +390,7 @@ jobs:
     if: |
       always() &&
       inputs.image_name != '' &&
-      (inputs.gitops_write_preprod == true || inputs.deploy_preprod == true) &&
+      inputs.gitops_write_preprod == true &&
       (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') &&
       needs.build.result == 'success' &&
       (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
@@ -500,174 +516,23 @@ jobs:
           exit-code: "0" # Non-blocking (reports but continues)
 
   # ============================================================
-  # DEPLOY — DEV (am-vps-nonprod / am-apps-dev)
-  # Runner label: "dev" (Kind nonprod host). kubeconfig via KUBECONFIG_NONPROD.
+  # PREPROD FEATURE BRANCH — ci-image + Argo API (no kubeconfig)
   # ============================================================
-  deploy-dev:
-    name: Deploy → Dev
+  preprod-feature-argo:
+    name: Preprod feature → Argo API
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
-    # Proceed when security jobs succeeded OR were intentionally skipped by caller
+    runs-on: ubuntu-latest
     if: |
       always() &&
-      inputs.image_name != '' && inputs.deploy_dev == true &&
+      inputs.image_name != '' && inputs.deploy_preprod == true &&
+      github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' &&
       needs.build.result == 'success' &&
       (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
       (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
       (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
-    # Kind nonprod runner is registered with label "dev" (and often "preprod").
-    runs-on: [self-hosted, linux, x64, docker, dev]
-    environment: ${{ inputs.gh_env_dev || format('dev-{0}', inputs.image_name) }}
-    permissions:
-      contents: read
-      packages: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
-
-      - name: Validate Helm Configuration
-        shell: bash
-        env:
-          INPUT_WORKING_DIRECTORY: ${{ inputs.working_directory }}
-        run: |
-          if [ ! -f "$INPUT_WORKING_DIRECTORY/helm/values.yaml" ]; then
-            echo "❌ REQUIRED file missing: $INPUT_WORKING_DIRECTORY/helm/values.yaml"
-            echo "Deployment cannot proceed without a base values file."
-            exit 1
-          fi
-
-      - name: Checkout Universal Helm Chart
-        uses: actions/checkout@v4
-        with:
-          repository: AM-Portfolio/am-pipelines
-          path: am-pipelines-repo
-          ref: main
-          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
-          clean: true
-
-      - name: Select nonprod cluster kubeconfig
-        shell: bash
-        env:
-          KUBECONFIG_NONPROD_B64: ${{ secrets.KUBECONFIG_NONPROD }}
-        run: |
-          chmod +x am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh
-          am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh dev
-
-      - name: Resolve Dev release name
-        id: release_dev
-        shell: bash
-        env:
-          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
-        run: |
-          chmod +x am-pipelines-repo/scripts/ci/resolve-helm-release.sh
-          chmod +x am-pipelines-repo/scripts/ci/list-kind-overlays.sh
-          RELEASE=$(am-pipelines-repo/scripts/ci/resolve-helm-release.sh "$INPUT_IMAGE_NAME" dev)
-          BASE="${INPUT_IMAGE_NAME%-preprod}"
-          BASE="${BASE%-dev}"
-          BASE="${BASE%-prod}"
-          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
-          echo "base=$BASE" >> "$GITHUB_OUTPUT"
-          echo "Dev Helm release: $RELEASE"
-
-      - name: Deploy to Dev via Helm
-        shell: bash
-        env:
-          INPUT_WORKING_DIRECTORY: ${{ inputs.working_directory }}
-          INPUT_DEV_NAMESPACE: ${{ inputs.dev_namespace }}
-          INPUT_REGISTRY: ${{ inputs.registry }}
-          INPUT_LANGUAGE: ${{ inputs.language }}
-          RELEASE_NAME: ${{ steps.release_dev.outputs.release }}
-          IMAGE_BASE: ${{ steps.release_dev.outputs.base }}
-          REPO_OWNER_RAW: ${{ github.repository_owner }}
-          RUN_ID: ${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          BASE_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.yaml"
-          MAPPING_VALUES="$INPUT_WORKING_DIRECTORY/helm/vault-mappings.yaml"
-          ENV_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.dev.yaml"
-
-          VALUES_ARG=()
-          if [ -f "$BASE_VALUES" ]; then
-            VALUES_ARG+=("-f" "$BASE_VALUES")
-          fi
-          if [ -f "$MAPPING_VALUES" ]; then
-            VALUES_ARG+=("-f" "$MAPPING_VALUES")
-          fi
-          if [ -f "$ENV_VALUES" ]; then
-            VALUES_ARG+=("-f" "$ENV_VALUES")
-          fi
-
-          OVERLAY_DIR="./am-pipelines-repo/helm/overlays/nonprod-kind"
-          while IFS= read -r f; do
-            [ -z "$f" ] && continue
-            if [ -f "$OVERLAY_DIR/$f" ]; then
-              VALUES_ARG+=("-f" "$OVERLAY_DIR/$f")
-            else
-              echo "WARN: missing $OVERLAY_DIR/$f"
-            fi
-          done < <(am-pipelines-repo/scripts/ci/list-kind-overlays.sh dev)
-
-          echo "🚀 [DEV] Deploying $RELEASE_NAME → $INPUT_DEV_NAMESPACE"
-          REPO_OWNER=$(echo "$REPO_OWNER_RAW" | tr '[:upper:]' '[:lower:]')
-          chmod +x am-pipelines-repo/scripts/ci/bump-release-image.sh
-          export RELEASE_NAME NAMESPACE="$INPUT_DEV_NAMESPACE"
-          export IMAGE_REGISTRY="$INPUT_REGISTRY/$REPO_OWNER"
-          export IMAGE_REPOSITORY="$IMAGE_BASE"
-          export IMAGE_TAG="$RUN_ID"
-          export LANGUAGE="$INPUT_LANGUAGE"
-          export CHART_DIR="./am-pipelines-repo/helm/universal-chart"
-          export PAUSE_ARGO=true
-          export ARGO_APP="$RELEASE_NAME"
-          echo "Helm values files (fresh install only): ${VALUES_ARG[*]}"
-          am-pipelines-repo/scripts/ci/bump-release-image.sh -- "${VALUES_ARG[@]}"
-
-      - name: Verify Dev Rollout
-        shell: bash
-        env:
-          INPUT_DEV_NAMESPACE: ${{ inputs.dev_namespace }}
-          RELEASE_NAME: ${{ steps.release_dev.outputs.release }}
-        run: |
-          ns="$INPUT_DEV_NAMESPACE"
-          dep="$RELEASE_NAME"
-          echo "⏳ Waiting for rollout: $dep in $ns ..."
-
-          if ! kubectl rollout status deployment/"$dep" -n "$ns" --timeout=10m; then
-            echo "❌ Rollout FAILED for $dep"
-            kubectl get pods -n "$ns"
-            kubectl get events -n "$ns" --sort-by='.lastTimestamp' | tail -n 20
-            exit 1
-          fi
-          echo "✅ $dep is healthy in dev"
-
-  # ============================================================
-  # DEPLOY — PREPROD (Kind / am-apps-preprod) via Helm
-  # Release must be image_name-preprod (matches Argo). Kind Vault =
-  # vault-preprod.asrax.in. On main, prefer gitops_write_preprod (Argo);
-  # set force_preprod_helm to Helm anyway.
-  # ============================================================
-  deploy-preprod:
-    name: Deploy → Preprod
-    needs: [build, vulnerability-scan, misconfig-scan, security-scan]
-    runs-on: [self-hosted, linux, x64, docker, preprod]
-    if: |
-      always() &&
-      inputs.image_name != '' && inputs.deploy_preprod == true &&
-      needs.build.result == 'success' &&
-      (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
-      (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
-      (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped') &&
-      (
-        inputs.force_preprod_helm == true ||
-        inputs.gitops_write_preprod != true ||
-        (github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master')
-      )
-    environment: ${{ inputs.gh_env_preprod || format('preprod-{0}', inputs.image_name) }}
     permissions:
       contents: write
       packages: write
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -675,6 +540,76 @@ jobs:
           token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
+      - name: Checkout am-pipelines scripts
+        uses: actions/checkout@v4
+        with:
+          repository: AM-Portfolio/am-pipelines
+          path: am-pipelines-repo
+          ref: main
+          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Resolve service base name
+        id: release
+        shell: bash
+        env:
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+        run: |
+          BASE="${INPUT_IMAGE_NAME%-preprod}"
+          BASE="${BASE%-dev}"
+          BASE="${BASE%-prod}"
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+
+      - name: Push ci-image.yaml on feature branch
+        shell: bash
+        env:
+          INPUT_WORKING_DIRECTORY: ${{ inputs.working_directory }}
+          INPUT_GIT_REF: ${{ github.ref_name }}
+          IMAGE_TAG: ${{ needs.build.outputs.image_tag || github.run_id }}
+        run: |
+          chmod +x am-pipelines-repo/scripts/ci/write-and-push-ci-image.sh
+          am-pipelines-repo/scripts/ci/write-and-push-ci-image.sh
+
+      - name: Align + sync feature branch via Argo API
+        shell: bash
+        env:
+          INPUT_SERVICE_NAME: ${{ steps.release.outputs.base }}
+          INPUT_GIT_REF: ${{ github.ref_name }}
+          INPUT_DEPLOYED_BY: ${{ github.actor }}
+          ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
+          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
+        run: |
+          set -euo pipefail
+          chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh
+          chmod +x am-pipelines-repo/scripts/ci/preprod-argo-align-feature-branch-api.sh
+          chmod +x am-pipelines-repo/scripts/ci/preprod-argo-ensure-auto-api.sh
+          am-pipelines-repo/scripts/ci/preprod-argo-align-feature-branch-api.sh
+          am-pipelines-repo/scripts/ci/preprod-argo-ensure-auto-api.sh
+
+  # ============================================================
+  # PREPROD Helm BREAK-GLASS only (force_preprod_helm)
+  # Runner-local kubeconfig only — GitHub kubeconfig secrets refused.
+  # ============================================================
+  deploy-preprod:
+    name: Deploy → Preprod (Helm break-glass)
+    needs: [build, vulnerability-scan, misconfig-scan, security-scan]
+    runs-on: [self-hosted, linux, x64, docker, preprod]
+    if: |
+      always() &&
+      inputs.image_name != '' && inputs.force_preprod_helm == true &&
+      needs.build.result == 'success' &&
+      (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
+      (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
+      (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
+    environment: ${{ inputs.gh_env_preprod || format('preprod-{0}', inputs.image_name) }}
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
       - name: Checkout Universal Helm Chart
         uses: actions/checkout@v4
         with:
@@ -683,15 +618,13 @@ jobs:
           ref: main
           token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
           clean: true
-
-      - name: Select nonprod cluster kubeconfig
+      - name: Select nonprod cluster kubeconfig (runner-local only)
         shell: bash
         env:
           KUBECONFIG_NONPROD_B64: ${{ secrets.KUBECONFIG_NONPROD }}
         run: |
           chmod +x am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh
           am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh preprod
-
       - name: Resolve preprod release name
         id: release
         shell: bash
@@ -706,169 +639,139 @@ jobs:
           BASE="${BASE%-prod}"
           echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
-          echo "Preprod Helm release: $RELEASE"
-
-      - name: Push ci-image.yaml on feature branch
-        if: github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master'
-        shell: bash
-        env:
-          INPUT_WORKING_DIRECTORY: ${{ inputs.working_directory }}
-          INPUT_GIT_REF: ${{ github.ref_name }}
-          IMAGE_TAG: ${{ github.run_id }}
-        run: |
-          chmod +x am-pipelines-repo/scripts/ci/write-and-push-ci-image.sh
-          am-pipelines-repo/scripts/ci/write-and-push-ci-image.sh
-
-      - name: Align Argo feature-branch (preprod)
-        if: github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master'
-        shell: bash
-        env:
-          INPUT_SERVICE_NAME: ${{ steps.release.outputs.base }}
-          INPUT_GIT_REF: ${{ github.ref_name }}
-          INPUT_DEPLOYED_BY: ${{ github.actor }}
-        run: |
-          chmod +x am-pipelines-repo/scripts/ci/preprod-argo-align-feature-branch.sh
-          am-pipelines-repo/scripts/ci/preprod-argo-align-feature-branch.sh
-
-      - name: Preprod Argo toggle gate
-        shell: bash
-        env:
-          INPUT_SERVICE_NAME: ${{ steps.release.outputs.base }}
-          INPUT_GIT_REF: ${{ github.ref_name }}
-          INPUT_FORCE_HELM: ${{ inputs.force_preprod_helm }}
-        run: |
-          chmod +x am-pipelines-repo/scripts/ci/preprod-argo-gate.sh
-          am-pipelines-repo/scripts/ci/preprod-argo-gate.sh
-
-      - name: Feature deploy via Argo Auto-Sync
-        if: github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master'
-        id: argo_feature
-        shell: bash
-        env:
-          INPUT_SERVICE_NAME: ${{ steps.release.outputs.base }}
-          RELEASE_NAME: ${{ steps.release.outputs.release }}
-        run: |
-          set -euo pipefail
-          APP="${INPUT_SERVICE_NAME}-preprod"
-          if kubectl -n argocd get application "$APP" >/dev/null 2>&1; then
-            chmod +x am-pipelines-repo/scripts/ci/preprod-argo-ensure-auto.sh
-            am-pipelines-repo/scripts/ci/preprod-argo-ensure-auto.sh
-            echo "mode=argo" >> "$GITHUB_OUTPUT"
-            echo "Argo UI path: values revision pinned to feature branch; Auto-Sync on; ci-image tag applied via Git"
-          else
-            echo "mode=helm" >> "$GITHUB_OUTPUT"
-            echo "WARN: Application $APP missing — will Helm install"
-          fi
-
       - name: Deploy to Preprod via Helm
-        if: |
-          github.ref == 'refs/heads/main' ||
-          github.ref == 'refs/heads/master' ||
-          steps.argo_feature.outputs.mode == 'helm' ||
-          inputs.force_preprod_helm == true
         shell: bash
         env:
           INPUT_WORKING_DIRECTORY: ${{ inputs.working_directory }}
           INPUT_PREPROD_NAMESPACE: ${{ inputs.preprod_namespace }}
           INPUT_REGISTRY: ${{ inputs.registry }}
-          INPUT_LANGUAGE: ${{ inputs.language }}
           RELEASE_NAME: ${{ steps.release.outputs.release }}
           IMAGE_BASE: ${{ steps.release.outputs.base }}
           REPO_OWNER_RAW: ${{ github.repository_owner }}
           RUN_ID: ${{ github.run_id }}
-          FORCE_HELM: ${{ inputs.force_preprod_helm }}
         run: |
           set -euo pipefail
           BASE_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.yaml"
           MAPPING_VALUES="$INPUT_WORKING_DIRECTORY/helm/vault-mappings.yaml"
           ENV_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.preprod.yaml"
-
           VALUES_ARG=()
-          if [ -f "$BASE_VALUES" ]; then
-            VALUES_ARG+=("-f" "$BASE_VALUES")
-          fi
-          if [ -f "$MAPPING_VALUES" ]; then
-            VALUES_ARG+=("-f" "$MAPPING_VALUES")
-          else
-            echo "WARN: missing $MAPPING_VALUES — Vault CSI mappings will not be applied"
-          fi
-          if [ -f "$ENV_VALUES" ]; then
-            VALUES_ARG+=("-f" "$ENV_VALUES")
-          else
-            echo "WARN: missing $ENV_VALUES"
-          fi
-          CI_IMAGE="$INPUT_WORKING_DIRECTORY/helm/ci-image.yaml"
-          if [ -f "$CI_IMAGE" ]; then
-            VALUES_ARG+=("-f" "$CI_IMAGE")
-          fi
-
-          OVERLAY_DIR="./am-pipelines-repo/helm/overlays/nonprod-kind"
+          [ -f "$BASE_VALUES" ] && VALUES_ARG+=("-f" "$BASE_VALUES")
+          [ -f "$MAPPING_VALUES" ] && VALUES_ARG+=("-f" "$MAPPING_VALUES")
+          [ -f "$ENV_VALUES" ] && VALUES_ARG+=("-f" "$ENV_VALUES")
+          OWNER=$(echo "$REPO_OWNER_RAW" | tr '[:upper:]' '[:lower:]')
+          IMAGE_REPO="${INPUT_REGISTRY}/${OWNER}/${IMAGE_BASE}"
+          OVERLAYS=()
           while IFS= read -r f; do
-            [ -z "$f" ] && continue
-            if [ -f "$OVERLAY_DIR/$f" ]; then
-              VALUES_ARG+=("-f" "$OVERLAY_DIR/$f")
-            else
-              echo "WARN: missing $OVERLAY_DIR/$f"
-            fi
-          done < <(am-pipelines-repo/scripts/ci/list-kind-overlays.sh preprod)
-
-          echo "🚀 [PREPROD] Deploying $RELEASE_NAME → $INPUT_PREPROD_NAMESPACE (image tag=$RUN_ID)"
-          REPO_OWNER=$(echo "$REPO_OWNER_RAW" | tr '[:upper:]' '[:lower:]')
-          chmod +x am-pipelines-repo/scripts/ci/bump-release-image.sh
-          export RELEASE_NAME NAMESPACE="$INPUT_PREPROD_NAMESPACE"
-          export IMAGE_REGISTRY="$INPUT_REGISTRY/$REPO_OWNER"
-          export IMAGE_REPOSITORY="$IMAGE_BASE"
-          export IMAGE_TAG="$RUN_ID"
-          export LANGUAGE="$INPUT_LANGUAGE"
-          export CHART_DIR="./am-pipelines-repo/helm/universal-chart"
-          # Prefer Argo Sync for enrolled apps; do not pause Auto (UI-first)
-          export PAUSE_ARGO=false
-          export ARGO_APP="$RELEASE_NAME"
-          echo "Helm values files: ${VALUES_ARG[*]}"
-          am-pipelines-repo/scripts/ci/bump-release-image.sh -- "${VALUES_ARG[@]}"
-
-      - name: Verify Preprod Rollout
+            [[ -n "$f" ]] && OVERLAYS+=("-f" "$f")
+          done < <(am-pipelines-repo/scripts/ci/list-kind-overlays.sh preprod "$IMAGE_BASE" || true)
+          helm upgrade --install "$RELEASE_NAME" am-pipelines-repo/helm/universal-chart \
+            --namespace "$INPUT_PREPROD_NAMESPACE" --create-namespace \
+            "${VALUES_ARG[@]}" "${OVERLAYS[@]}" \
+            --set "global.image.repository=${IMAGE_REPO}" \
+            --set "global.image.tag=${RUN_ID}" \
+            --wait --timeout 10m
+      - name: Wait for Preprod Rollout
         shell: bash
         env:
           INPUT_PREPROD_NAMESPACE: ${{ inputs.preprod_namespace }}
           RELEASE_NAME: ${{ steps.release.outputs.release }}
         run: |
-          ns="$INPUT_PREPROD_NAMESPACE"
-          dep="$RELEASE_NAME"
-          echo "⏳ Waiting for rollout: $dep in $ns ..."
-
-          if ! kubectl rollout status deployment/"$dep" -n "$ns" --timeout=10m; then
-            echo "❌ Rollout FAILED for $dep"
-            kubectl get pods -n "$ns" -l "app.kubernetes.io/instance=$dep" -o wide || true
-            kubectl get events -n "$ns" --field-selector "involvedObject.name=$dep" --sort-by='.lastTimestamp' | tail -n 20 || true
+          if ! kubectl rollout status deployment/"$RELEASE_NAME" -n "$INPUT_PREPROD_NAMESPACE" --timeout=10m; then
+            kubectl get pods -n "$INPUT_PREPROD_NAMESPACE"
             exit 1
           fi
-          echo "✅ $dep is healthy in preprod"
 
-      - name: Diagnostics on Failure
-        if: failure()
+  # ============================================================
+  # DEV Helm BREAK-GLASS (default off). Prefer: am gitops set-tag --env dev
+  # ============================================================
+  deploy-dev:
+    name: Deploy → Dev (Helm break-glass)
+    needs: [build, vulnerability-scan, misconfig-scan, security-scan]
+    if: |
+      always() &&
+      inputs.image_name != '' && inputs.deploy_dev == true &&
+      needs.build.result == 'success' &&
+      (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
+      (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
+      (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
+    runs-on: [self-hosted, linux, x64, docker, dev]
+    environment: ${{ inputs.gh_env_dev || format('dev-{0}', inputs.image_name) }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+      - name: Checkout Universal Helm Chart
+        uses: actions/checkout@v4
+        with:
+          repository: AM-Portfolio/am-pipelines
+          path: am-pipelines-repo
+          ref: main
+          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          clean: true
+      - name: Select nonprod cluster kubeconfig (runner-local only)
         shell: bash
         env:
-          INPUT_PREPROD_NAMESPACE: ${{ inputs.preprod_namespace }}
-          RELEASE_NAME: ${{ steps.release.outputs.release }}
+          KUBECONFIG_NONPROD_B64: ${{ secrets.KUBECONFIG_NONPROD }}
         run: |
-          echo "🔍 Preprod deployment failed. Diagnostics:"
-          kubectl get pods -n "$INPUT_PREPROD_NAMESPACE" -o wide
-          kubectl describe deployment/"$RELEASE_NAME" -n "$INPUT_PREPROD_NAMESPACE" 2>&1 | tail -n 40
-          POD=$(kubectl get pods -n "$INPUT_PREPROD_NAMESPACE" -l "app.kubernetes.io/instance=$RELEASE_NAME" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
-          if [ -n "$POD" ]; then
-            kubectl describe pod "$POD" -n "$INPUT_PREPROD_NAMESPACE" 2>&1 | tail -n 50
-          fi
+          chmod +x am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh
+          am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh dev
+      - name: Resolve Dev release name
+        id: release_dev
+        shell: bash
+        env:
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
+        run: |
+          chmod +x am-pipelines-repo/scripts/ci/resolve-helm-release.sh
+          chmod +x am-pipelines-repo/scripts/ci/list-kind-overlays.sh
+          RELEASE=$(am-pipelines-repo/scripts/ci/resolve-helm-release.sh "$INPUT_IMAGE_NAME" dev)
+          BASE="${INPUT_IMAGE_NAME%-preprod}"
+          BASE="${BASE%-dev}"
+          BASE="${BASE%-prod}"
+          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+      - name: Deploy to Dev via Helm
+        shell: bash
+        env:
+          INPUT_WORKING_DIRECTORY: ${{ inputs.working_directory }}
+          INPUT_DEV_NAMESPACE: ${{ inputs.dev_namespace }}
+          INPUT_REGISTRY: ${{ inputs.registry }}
+          RELEASE_NAME: ${{ steps.release_dev.outputs.release }}
+          IMAGE_BASE: ${{ steps.release_dev.outputs.base }}
+          REPO_OWNER_RAW: ${{ github.repository_owner }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          BASE_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.yaml"
+          MAPPING_VALUES="$INPUT_WORKING_DIRECTORY/helm/vault-mappings.yaml"
+          ENV_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.dev.yaml"
+          VALUES_ARG=()
+          [ -f "$BASE_VALUES" ] && VALUES_ARG+=("-f" "$BASE_VALUES")
+          [ -f "$MAPPING_VALUES" ] && VALUES_ARG+=("-f" "$MAPPING_VALUES")
+          [ -f "$ENV_VALUES" ] && VALUES_ARG+=("-f" "$ENV_VALUES")
+          OWNER=$(echo "$REPO_OWNER_RAW" | tr '[:upper:]' '[:lower:]')
+          IMAGE_REPO="${INPUT_REGISTRY}/${OWNER}/${IMAGE_BASE}"
+          OVERLAYS=()
+          while IFS= read -r f; do
+            [[ -n "$f" ]] && OVERLAYS+=("-f" "$f")
+          done < <(am-pipelines-repo/scripts/ci/list-kind-overlays.sh dev "$IMAGE_BASE" || true)
+          helm upgrade --install "$RELEASE_NAME" am-pipelines-repo/helm/universal-chart \
+            --namespace "$INPUT_DEV_NAMESPACE" --create-namespace \
+            "${VALUES_ARG[@]}" "${OVERLAYS[@]}" \
+            --set "global.image.repository=${IMAGE_REPO}" \
+            --set "global.image.tag=${RUN_ID}" \
+            --wait --timeout 10m
 
   # ============================================================
-  # DEPLOY — PROD (Contabo / am-apps-prod only)
-  # Prefer runners labeled vps-prod; kubeconfig via KUBECONFIG_PROD
+  # PROD Helm BREAK-GLASS (default off). Prefer: promote + Argo
   # ============================================================
   deploy-prod:
-    name: Deploy → Prod
+    name: Deploy → Prod (Helm break-glass)
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
     runs-on: [self-hosted, linux, x64, docker, vps-prod]
-    # Proceed when security jobs succeeded OR were intentionally skipped by caller
     if: |
       always() &&
       inputs.image_name != '' && inputs.deploy_prod == true &&
@@ -880,13 +783,11 @@ jobs:
     permissions:
       contents: read
       packages: write
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
-
       - name: Checkout Universal Helm Chart
         uses: actions/checkout@v4
         with:
@@ -895,15 +796,13 @@ jobs:
           ref: main
           token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
           clean: true
-
-      - name: Select prod cluster kubeconfig
+      - name: Select prod cluster kubeconfig (runner-local only)
         shell: bash
         env:
           KUBECONFIG_PROD_B64: ${{ secrets.KUBECONFIG_PROD }}
         run: |
           chmod +x am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh
           am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh prod
-
       - name: Resolve Prod release name
         id: release_prod
         shell: bash
@@ -917,76 +816,31 @@ jobs:
           BASE="${BASE%-prod}"
           echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
-          echo "Prod Helm release: $RELEASE (bare — no Kind overlays)"
-
       - name: Deploy to Prod via Helm
         shell: bash
         env:
           INPUT_WORKING_DIRECTORY: ${{ inputs.working_directory }}
           INPUT_PROD_NAMESPACE: ${{ inputs.prod_namespace }}
           INPUT_REGISTRY: ${{ inputs.registry }}
-          INPUT_LANGUAGE: ${{ inputs.language }}
           RELEASE_NAME: ${{ steps.release_prod.outputs.release }}
           IMAGE_BASE: ${{ steps.release_prod.outputs.base }}
           REPO_OWNER_RAW: ${{ github.repository_owner }}
           RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
+          echo "::warning::Break-glass prod Helm — prefer am gitops promote + Argo sync"
           BASE_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.yaml"
           MAPPING_VALUES="$INPUT_WORKING_DIRECTORY/helm/vault-mappings.yaml"
           ENV_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.prod.yaml"
-
           VALUES_ARG=()
-          if [ -f "$BASE_VALUES" ]; then
-            VALUES_ARG+=("-f" "$BASE_VALUES")
-          fi
-          if [ -f "$MAPPING_VALUES" ]; then
-            VALUES_ARG+=("-f" "$MAPPING_VALUES")
-          fi
-          if [ -f "$ENV_VALUES" ]; then
-            VALUES_ARG+=("-f" "$ENV_VALUES")
-          fi
-
-          echo "🚀 [PROD] Deploying $RELEASE_NAME → $INPUT_PROD_NAMESPACE"
-          REPO_OWNER=$(echo "$REPO_OWNER_RAW" | tr '[:upper:]' '[:lower:]')
-          chmod +x am-pipelines-repo/scripts/ci/bump-release-image.sh
-          export RELEASE_NAME NAMESPACE="$INPUT_PROD_NAMESPACE"
-          export IMAGE_REGISTRY="$INPUT_REGISTRY/$REPO_OWNER"
-          export IMAGE_REPOSITORY="$IMAGE_BASE"
-          export IMAGE_TAG="$RUN_ID"
-          export LANGUAGE="$INPUT_LANGUAGE"
-          export CHART_DIR="./am-pipelines-repo/helm/universal-chart"
-          # Prod Contabo Argo: pause auto only for explicit force rolls; default pause on to avoid selfHeal fight
-          export PAUSE_ARGO=true
-          export ARGO_APP="$RELEASE_NAME"
-          echo "Helm values files (fresh install only): ${VALUES_ARG[*]}"
-          am-pipelines-repo/scripts/ci/bump-release-image.sh -- "${VALUES_ARG[@]}"
-
-      - name: Verify Prod Rollout
-        shell: bash
-        env:
-          INPUT_PROD_NAMESPACE: ${{ inputs.prod_namespace }}
-          RELEASE_NAME: ${{ steps.release_prod.outputs.release }}
-        run: |
-          ns="$INPUT_PROD_NAMESPACE"
-          dep="$RELEASE_NAME"
-          echo "⏳ Waiting for rollout: $dep in $ns ..."
-
-          if ! kubectl rollout status deployment/"$dep" -n "$ns" --timeout=10m; then
-            echo "❌ Rollout FAILED for $dep in prod"
-            kubectl get pods -n "$ns"
-            kubectl get events -n "$ns" --sort-by='.lastTimestamp' | tail -n 20
-            exit 1
-          fi
-          echo "✅ $dep is healthy in prod"
-
-      - name: Diagnostics on Failure
-        if: failure()
-        shell: bash
-        env:
-          INPUT_PROD_NAMESPACE: ${{ inputs.prod_namespace }}
-          RELEASE_NAME: ${{ steps.release_prod.outputs.release }}
-        run: |
-          echo "🔍 Prod deployment failed. Diagnostics:"
-          kubectl get pods -n "$INPUT_PROD_NAMESPACE" -o wide
-          kubectl describe deployment/"$RELEASE_NAME" -n "$INPUT_PROD_NAMESPACE" 2>&1 | tail -n 30
+          [ -f "$BASE_VALUES" ] && VALUES_ARG+=("-f" "$BASE_VALUES")
+          [ -f "$MAPPING_VALUES" ] && VALUES_ARG+=("-f" "$MAPPING_VALUES")
+          [ -f "$ENV_VALUES" ] && VALUES_ARG+=("-f" "$ENV_VALUES")
+          OWNER=$(echo "$REPO_OWNER_RAW" | tr '[:upper:]' '[:lower:]')
+          IMAGE_REPO="${INPUT_REGISTRY}/${OWNER}/${IMAGE_BASE}"
+          helm upgrade --install "$RELEASE_NAME" am-pipelines-repo/helm/universal-chart \
+            --namespace "$INPUT_PROD_NAMESPACE" --create-namespace \
+            "${VALUES_ARG[@]}" \
+            --set "global.image.repository=${IMAGE_REPO}" \
+            --set "global.image.tag=${RUN_ID}" \
+            --wait --timeout 10m

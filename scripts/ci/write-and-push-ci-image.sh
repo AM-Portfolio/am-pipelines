@@ -24,6 +24,7 @@ cat > "$FILE" <<EOF
 # Last valueFile in Argo Application — overrides am-gitops image-tags while values revision is this branch.
 global:
   image:
+    digest: ""
     tag: "${TAG}"
 EOF
 

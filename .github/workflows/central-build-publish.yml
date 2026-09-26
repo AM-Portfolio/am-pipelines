@@ -563,7 +563,7 @@ jobs:
         shell: bash
         env:
           INPUT_WORKING_DIRECTORY: ${{ inputs.working_directory }}
-          INPUT_GIT_REF: ${{ github.ref_name }}
+          INPUT_GIT_REF: ${{ github.head_ref || github.ref_name }}
           IMAGE_TAG: ${{ needs.build.outputs.image_tag || github.run_id }}
         run: |
           chmod +x am-pipelines-repo/scripts/ci/write-and-push-ci-image.sh
@@ -573,7 +573,7 @@ jobs:
         shell: bash
         env:
           INPUT_SERVICE_NAME: ${{ steps.release.outputs.base }}
-          INPUT_GIT_REF: ${{ github.ref_name }}
+          INPUT_GIT_REF: ${{ github.head_ref || github.ref_name }}
           INPUT_DEPLOYED_BY: ${{ github.actor }}
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}

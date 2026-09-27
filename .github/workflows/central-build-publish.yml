@@ -117,6 +117,13 @@ on:
         type: string
         default: ""
         description: "Path under values repo to helm/ (default: working_directory)"
+      contabo_wait_preprod:
+        required: false
+        type: boolean
+        default: true
+        description: >-
+          When true (default), Contabo Argo sync+wait preprod runs inside this workflow after pin.
+          Set false when the caller runs Contabo preprod in parallel with dig/prod/dr approve jobs.
     secrets:
       ARGOCD_AUTH_TOKEN:
         required: false
@@ -500,6 +507,7 @@ jobs:
       always() &&
       inputs.image_name != '' &&
       inputs.gitops_write_preprod == true &&
+      inputs.contabo_wait_preprod == true &&
       (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') &&
       needs.build.result == 'success' &&
       needs.gitops-preprod.result == 'success'

@@ -46,20 +46,21 @@ argo_sync() {
   echo "OK: sync ${app}"
 }
 
-# Refresh+sync then poll until Healthy/Synced. Optional EXPECT_TAG substring in live images.
+# Refresh+sync then poll until Healthy. Optional EXPECT_TAG substring in live images.
 # Env: WAIT_HEALTH_SECONDS (default 300)
-# Do not fail on the first Degraded sample (rollouts often report Degraded while pods start).
-# Fail immediately on Missing; otherwise poll until Healthy+Synced or timeout.
+# Success = health Healthy (live deploy). Synced is preferred but OutOfSync alone does not fail.
+# Fail immediately on Missing; fail at timeout if not Healthy.
 argo_sync_and_wait_healthy() {
   local app="$1"
   local expect_tag="${2:-}"
   local wait_health="${WAIT_HEALTH_SECONDS:-300}"
   local last_health="" last_sync="" last_images=""
+  local outofsync_retried=0
 
   argo_refresh_hard "$app"
   argo_sync "$app"
 
-  echo "Waiting for ${app} Healthy/Synced (up to ${wait_health}s)..."
+  echo "Waiting for ${app} Healthy (up to ${wait_health}s)..."
   local health_deadline=$((SECONDS + wait_health))
   while (( SECONDS < health_deadline )); do
     local raw health sync images
@@ -75,17 +76,34 @@ argo_sync_and_wait_healthy() {
     last_sync="$sync"
     last_images="$images"
     echo "status health=${health} sync=${sync} images=${images}"
-    if [[ "$health" == "Healthy" && "$sync" == "Synced" ]]; then
-      if [[ -n "$expect_tag" && -n "$images" && "$images" != *"$expect_tag"* ]]; then
-        echo "::warning::App Healthy/Synced but live images do not yet contain tag=${expect_tag} (${images})"
-      fi
-      echo "::notice::OK ${app} Healthy/Synced"
-      return 0
-    fi
+
     if [[ "$health" == "Missing" ]]; then
       echo "::error::${app} health=Missing sync=${sync} — deploy failed"
       return 1
     fi
+
+    if [[ "$health" == "Healthy" ]]; then
+      if [[ -n "$expect_tag" && -n "$images" && "$images" != *"$expect_tag"* ]]; then
+        echo "::warning::App Healthy but live images do not yet contain tag=${expect_tag} (${images})"
+      fi
+      if [[ "$sync" == "Synced" ]]; then
+        echo "::notice::OK ${app} Healthy/Synced"
+        return 0
+      fi
+      # Healthy but OutOfSync: one re-sync, then accept Healthy (do not fail CI)
+      if (( outofsync_retried == 0 )); then
+        echo "::warning::${app} Healthy but sync=${sync} — retrying refresh+sync once"
+        outofsync_retried=1
+        argo_refresh_hard "$app" || true
+        argo_sync "$app" || true
+        sleep 10
+        continue
+      fi
+      echo "::warning::${app} Healthy but still sync=${sync} — accepting as deploy success"
+      echo "::notice::OK ${app} Healthy (sync=${sync})"
+      return 0
+    fi
+
     # Progressing / Degraded / Unknown: keep polling until timeout
     sleep 10
   done

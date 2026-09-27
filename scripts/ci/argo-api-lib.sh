@@ -41,6 +41,14 @@ argo_api() {
       attempt=$((attempt + 1))
       continue
     fi
+    # Contabo Argo → Kind am-vps-nonprod (:6443) sometimes EOFs briefly; Application PUT/sync returns 500.
+    if [[ "$http" == "500" ]] && echo "$resp" | grep -qiE 'EOF|failed to get server version|getting k8s server version|connection reset'; then
+      sleep_s=$(( attempt < 4 ? attempt * 8 : 45 ))
+      echo "::warning::Argo API ${method} ${path} HTTP 500 (Kind API transient) — retry ${attempt}/${max} in ${sleep_s}s" >&2
+      sleep "$sleep_s"
+      attempt=$((attempt + 1))
+      continue
+    fi
     echo "::error::Argo API ${method} ${path} HTTP ${http}: ${resp}" >&2
     return 1
   done

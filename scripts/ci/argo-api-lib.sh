@@ -33,7 +33,8 @@ argo_api() {
       printf '%s' "$resp"
       return 0
     fi
-    if [[ "$http" == "502" || "$http" == "503" || "$http" == "504" || "$http" == "429" ]]; then
+    # Contabo sits behind Cloudflare — 502/503/504/429/520–524 are retryable (origin overload / CF edge).
+    if [[ "$http" == "502" || "$http" == "503" || "$http" == "504" || "$http" == "429" || "$http" == "520" || "$http" == "521" || "$http" == "522" || "$http" == "523" || "$http" == "524" ]]; then
       # Cloudflare retry_after often ~60s on 502; backoff grows but caps at 60
       sleep_s=$(( attempt < 4 ? attempt * 5 : 60 ))
       echo "::warning::Argo API ${method} ${path} HTTP ${http} (transient) — retry ${attempt}/${max} in ${sleep_s}s" >&2

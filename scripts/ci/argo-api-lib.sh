@@ -48,10 +48,13 @@ argo_sync() {
 
 # Refresh+sync then poll until Healthy/Synced. Optional EXPECT_TAG substring in live images.
 # Env: WAIT_HEALTH_SECONDS (default 300)
+# Do not fail on the first Degraded sample (rollouts often report Degraded while pods start).
+# Fail immediately on Missing; otherwise poll until Healthy+Synced or timeout.
 argo_sync_and_wait_healthy() {
   local app="$1"
   local expect_tag="${2:-}"
   local wait_health="${WAIT_HEALTH_SECONDS:-300}"
+  local last_health="" last_sync="" last_images=""
 
   argo_refresh_hard "$app"
   argo_sync "$app"
@@ -68,6 +71,9 @@ argo_sync_and_wait_healthy() {
     health="$(python3 -c 'import json,sys; d=json.load(sys.stdin); print(((d.get("status") or {}).get("health") or {}).get("status") or "")' <<<"$raw")"
     sync="$(python3 -c 'import json,sys; d=json.load(sys.stdin); print(((d.get("status") or {}).get("sync") or {}).get("status") or "")' <<<"$raw")"
     images="$(python3 -c 'import json,sys; d=json.load(sys.stdin); print(",".join(((d.get("status") or {}).get("summary") or {}).get("images") or []))' <<<"$raw")"
+    last_health="$health"
+    last_sync="$sync"
+    last_images="$images"
     echo "status health=${health} sync=${sync} images=${images}"
     if [[ "$health" == "Healthy" && "$sync" == "Synced" ]]; then
       if [[ -n "$expect_tag" && -n "$images" && "$images" != *"$expect_tag"* ]]; then
@@ -76,12 +82,13 @@ argo_sync_and_wait_healthy() {
       echo "::notice::OK ${app} Healthy/Synced"
       return 0
     fi
-    if [[ "$health" == "Degraded" || "$health" == "Missing" ]]; then
-      echo "::error::${app} health=${health} sync=${sync} — deploy failed"
+    if [[ "$health" == "Missing" ]]; then
+      echo "::error::${app} health=Missing sync=${sync} — deploy failed"
       return 1
     fi
+    # Progressing / Degraded / Unknown: keep polling until timeout
     sleep 10
   done
-  echo "::error::${app} wait-healthy timeout after ${wait_health}s — deploy failed"
+  echo "::error::${app} wait-healthy timeout after ${wait_health}s — last health=${last_health} sync=${last_sync} images=${last_images}"
   return 1
 }

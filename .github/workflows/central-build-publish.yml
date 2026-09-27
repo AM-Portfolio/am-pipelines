@@ -473,9 +473,9 @@ jobs:
           git config user.name "am-gitops-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           PIN="preprod/image-tags/${SVC}.yaml"
-          # Idempotent: skip commit when digest already matches (avoid tag-only churn)
-          if [[ -n "${DIGEST}" && -f "$PIN" ]]; then
-            OLD="$(grep -E '^\s*digest:' "$PIN" | head -1 | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+          # Idempotent: compare NEW digest to what is on origin/main (not the file we just wrote)
+          if [[ -n "${DIGEST}" ]]; then
+            OLD="$(git show "HEAD:${PIN}" 2>/dev/null | grep -E '^\s*digest:' | head -1 | sed -E 's/.*"([^"]+)".*/\1/' || true)"
             if [[ -n "$OLD" && "$OLD" == "$DIGEST" ]]; then
               echo "No digest change (${DIGEST}) — skip gitops commit"
               exit 0

@@ -18,11 +18,19 @@ argo_api() {
   local method="$1" path="$2" body="${3:-}"
   argo_require_token
   local url="${ARGOCD_SERVER}${path}"
-  local args=(-sS -f -X "$method" -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" -H "Content-Type: application/json" -H "User-Agent: am-pipelines-ci")
+  local args=(-sS -w "\n%{http_code}" -X "$method" -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" -H "Content-Type: application/json" -H "User-Agent: am-pipelines-ci")
   if [[ -n "$body" ]]; then
     args+=(-d "$body")
   fi
-  curl "${args[@]}" "$url"
+  local resp http
+  resp="$(curl "${args[@]}" "$url")" || true
+  http="$(printf '%s' "$resp" | tail -n1)"
+  resp="$(printf '%s' "$resp" | sed '$d')"
+  if [[ "$http" != 2* ]]; then
+    echo "::error::Argo API ${method} ${path} HTTP ${http}: ${resp}" >&2
+    return 1
+  fi
+  printf '%s' "$resp"
 }
 
 argo_refresh_hard() {
@@ -33,6 +41,7 @@ argo_refresh_hard() {
 
 argo_sync() {
   local app="$1"
-  argo_api POST "/api/v1/applications/${app}/sync" '{"prune":false}' >/dev/null
+  # Contabo requires ApplicationSyncRequest.name (400 without it)
+  argo_api POST "/api/v1/applications/${app}/sync" "{\"name\":\"${app}\",\"prune\":false}" >/dev/null
   echo "OK: sync ${app}"
 }

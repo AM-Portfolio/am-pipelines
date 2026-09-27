@@ -40,36 +40,28 @@ on:
         type: string
         default: "am-apps-prod"
         description: "Kubernetes namespace for prod"
+      # Deprecated no-ops (kept for caller API compat). Contabo Argo only — no Helm from GHA.
       deploy_dev:
         required: false
         type: boolean
-        # Dev is manual: use am gitops set-tag / set-image-tag.yml or feature valuesRev — not CI Helm.
         default: false
-        description: >-
-          Legacy break-glass Helm to Kind dev (requires runner-local kubeconfig).
-          Default false — prefer am gitops set-tag --env dev + Argo sync (no kubeconfig in GitHub).
+        description: "Deprecated no-op. Dev = Manual Deploy / am gitops set-tag + Contabo Argo."
       deploy_prod:
         required: false
         type: boolean
-        # Prod is promote PR + Argo only. Never default-on Helm from service CI.
         default: false
-        description: >-
-          Legacy break-glass Helm to Contabo prod. Default false — use am gitops promote + Argo.
-          Do not store Contabo kubeconfig in GitHub.
+        description: "Deprecated no-op. Prod = Manual Deploy promote + Contabo Argo (never Helm)."
       deploy_preprod:
         required: false
         type: boolean
         default: true
         description: >-
-          Feature-branch: build+publish GHCR only (no bot commit of ci-image.yaml — that caused CI loops).
-          On main/master: no-op when gitops_write_preprod.
+          Feature-branch: GHCR only notice job. Main: Contabo Argo preprod after gitops pin.
       force_preprod_helm:
         required: false
         type: boolean
         default: false
-        description: >-
-          Break-glass only: Helm roll on a self-hosted runner with local kubeconfig.
-          Refuses GitHub-stored kubeconfig secrets. Prefer Argo API.
+        description: "Deprecated no-op. Helm removed from central-build-publish."
       skip_security_scan:
         required: false
         type: boolean
@@ -387,7 +379,7 @@ jobs:
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 
   # ============================================================
-  # GITOPS — auto-commit preprod image-tags to am-gitops (pin SoT only; no Argo)
+  # GITOPS — auto-commit preprod image-tags (SoT). Contabo Argo follows.
   # Requires org GITHUB_PAT (or GHCR_TOKEN) with contents:write on am-gitops.
   # ============================================================
   gitops-preprod:
@@ -498,6 +490,45 @@ jobs:
           git push origin HEAD:main
 
   # ============================================================
+  # CONTABO ARGO — sync+wait preprod after main pin (fail if not Healthy)
+  # ============================================================
+  argo-preprod:
+    name: Contabo Argo → preprod
+    needs: [build, gitops-preprod]
+    runs-on: ubuntu-latest
+    if: |
+      always() &&
+      inputs.image_name != '' &&
+      inputs.gitops_write_preprod == true &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') &&
+      needs.build.result == 'success' &&
+      needs.gitops-preprod.result == 'success'
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout am-pipelines scripts
+        uses: actions/checkout@v4
+        with:
+          repository: AM-Portfolio/am-pipelines
+          path: am-pipelines-repo
+          ref: main
+          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Sync + wait Contabo Healthy/Synced
+        env:
+          ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
+          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
+          INPUT_SERVICE_NAME: ${{ inputs.image_name }}
+          INPUT_ENVIRONMENT: preprod
+          INPUT_IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          sleep 5
+          chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh
+          chmod +x am-pipelines-repo/scripts/ci/argo-sync-and-wait.sh
+          am-pipelines-repo/scripts/ci/argo-sync-and-wait.sh
+
+  # ============================================================
   # VULNERABILITY SCAN — GitHub-hosted runner
   # Scans the built Docker image for CVEs
   # ============================================================
@@ -555,264 +586,4 @@ jobs:
         run: |
           TAG="${{ needs.build.outputs.image_tag || github.run_id }}"
           echo "::notice::Image published to GHCR tag=${TAG}. No ci-image.yaml commit (avoids CI loops)."
-          echo "::notice::Preprod roll: merge to main (gitops pin) or am gitops set-tag / Contabo sync."
-
-  # ============================================================
-  # PREPROD Helm BREAK-GLASS only (force_preprod_helm)
-  # Runner-local kubeconfig only — GitHub kubeconfig secrets refused.
-  # ============================================================
-  deploy-preprod:
-    name: Helm break-glass Preprod (off)
-    needs: [build, vulnerability-scan, misconfig-scan, security-scan]
-    runs-on: [self-hosted, linux, x64, docker, preprod]
-    if: |
-      always() &&
-      inputs.image_name != '' && inputs.force_preprod_helm == true &&
-      needs.build.result == 'success' &&
-      (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
-      (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
-      (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
-    environment: ${{ inputs.gh_env_preprod || format('preprod-{0}', inputs.image_name) }}
-    permissions:
-      contents: write
-      packages: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
-      - name: Checkout Universal Helm Chart
-        uses: actions/checkout@v4
-        with:
-          repository: AM-Portfolio/am-pipelines
-          path: am-pipelines-repo
-          ref: main
-          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
-          clean: true
-      - name: Select nonprod cluster kubeconfig (runner-local only)
-        shell: bash
-        env:
-          KUBECONFIG_NONPROD_B64: ${{ secrets.KUBECONFIG_NONPROD }}
-        run: |
-          chmod +x am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh
-          am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh preprod
-      - name: Resolve preprod release name
-        id: release
-        shell: bash
-        env:
-          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
-        run: |
-          chmod +x am-pipelines-repo/scripts/ci/resolve-helm-release.sh
-          chmod +x am-pipelines-repo/scripts/ci/list-kind-overlays.sh
-          RELEASE=$(am-pipelines-repo/scripts/ci/resolve-helm-release.sh "$INPUT_IMAGE_NAME" preprod)
-          BASE="${INPUT_IMAGE_NAME%-preprod}"
-          BASE="${BASE%-dev}"
-          BASE="${BASE%-prod}"
-          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
-          echo "base=$BASE" >> "$GITHUB_OUTPUT"
-      - name: Deploy to Preprod via Helm
-        shell: bash
-        env:
-          INPUT_WORKING_DIRECTORY: ${{ inputs.working_directory }}
-          INPUT_PREPROD_NAMESPACE: ${{ inputs.preprod_namespace }}
-          INPUT_REGISTRY: ${{ inputs.registry }}
-          RELEASE_NAME: ${{ steps.release.outputs.release }}
-          IMAGE_BASE: ${{ steps.release.outputs.base }}
-          REPO_OWNER_RAW: ${{ github.repository_owner }}
-          RUN_ID: ${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          BASE_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.yaml"
-          MAPPING_VALUES="$INPUT_WORKING_DIRECTORY/helm/vault-mappings.yaml"
-          ENV_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.preprod.yaml"
-          VALUES_ARG=()
-          [ -f "$BASE_VALUES" ] && VALUES_ARG+=("-f" "$BASE_VALUES")
-          [ -f "$MAPPING_VALUES" ] && VALUES_ARG+=("-f" "$MAPPING_VALUES")
-          [ -f "$ENV_VALUES" ] && VALUES_ARG+=("-f" "$ENV_VALUES")
-          OWNER=$(echo "$REPO_OWNER_RAW" | tr '[:upper:]' '[:lower:]')
-          IMAGE_REPO="${INPUT_REGISTRY}/${OWNER}/${IMAGE_BASE}"
-          OVERLAYS=()
-          while IFS= read -r f; do
-            [[ -n "$f" ]] && OVERLAYS+=("-f" "$f")
-          done < <(am-pipelines-repo/scripts/ci/list-kind-overlays.sh preprod "$IMAGE_BASE" || true)
-          helm upgrade --install "$RELEASE_NAME" am-pipelines-repo/helm/universal-chart \
-            --namespace "$INPUT_PREPROD_NAMESPACE" --create-namespace \
-            "${VALUES_ARG[@]}" "${OVERLAYS[@]}" \
-            --set "global.image.repository=${IMAGE_REPO}" \
-            --set "global.image.tag=${RUN_ID}" \
-            --wait --timeout 10m
-      - name: Wait for Preprod Rollout
-        shell: bash
-        env:
-          INPUT_PREPROD_NAMESPACE: ${{ inputs.preprod_namespace }}
-          RELEASE_NAME: ${{ steps.release.outputs.release }}
-        run: |
-          if ! kubectl rollout status deployment/"$RELEASE_NAME" -n "$INPUT_PREPROD_NAMESPACE" --timeout=10m; then
-            kubectl get pods -n "$INPUT_PREPROD_NAMESPACE"
-            exit 1
-          fi
-
-  # ============================================================
-  # DEV Helm BREAK-GLASS (default off). Prefer: am gitops set-tag --env dev
-  # ============================================================
-  deploy-dev:
-    name: Helm break-glass Dev (off)
-    needs: [build, vulnerability-scan, misconfig-scan, security-scan]
-    if: |
-      always() &&
-      inputs.image_name != '' && inputs.deploy_dev == true &&
-      needs.build.result == 'success' &&
-      (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
-      (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
-      (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
-    runs-on: [self-hosted, linux, x64, docker, dev]
-    environment: ${{ inputs.gh_env_dev || format('dev-{0}', inputs.image_name) }}
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
-      - name: Checkout Universal Helm Chart
-        uses: actions/checkout@v4
-        with:
-          repository: AM-Portfolio/am-pipelines
-          path: am-pipelines-repo
-          ref: main
-          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
-          clean: true
-      - name: Select nonprod cluster kubeconfig (runner-local only)
-        shell: bash
-        env:
-          KUBECONFIG_NONPROD_B64: ${{ secrets.KUBECONFIG_NONPROD }}
-        run: |
-          chmod +x am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh
-          am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh dev
-      - name: Resolve Dev release name
-        id: release_dev
-        shell: bash
-        env:
-          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
-        run: |
-          chmod +x am-pipelines-repo/scripts/ci/resolve-helm-release.sh
-          chmod +x am-pipelines-repo/scripts/ci/list-kind-overlays.sh
-          RELEASE=$(am-pipelines-repo/scripts/ci/resolve-helm-release.sh "$INPUT_IMAGE_NAME" dev)
-          BASE="${INPUT_IMAGE_NAME%-preprod}"
-          BASE="${BASE%-dev}"
-          BASE="${BASE%-prod}"
-          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
-          echo "base=$BASE" >> "$GITHUB_OUTPUT"
-      - name: Deploy to Dev via Helm
-        shell: bash
-        env:
-          INPUT_WORKING_DIRECTORY: ${{ inputs.working_directory }}
-          INPUT_DEV_NAMESPACE: ${{ inputs.dev_namespace }}
-          INPUT_REGISTRY: ${{ inputs.registry }}
-          RELEASE_NAME: ${{ steps.release_dev.outputs.release }}
-          IMAGE_BASE: ${{ steps.release_dev.outputs.base }}
-          REPO_OWNER_RAW: ${{ github.repository_owner }}
-          RUN_ID: ${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          BASE_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.yaml"
-          MAPPING_VALUES="$INPUT_WORKING_DIRECTORY/helm/vault-mappings.yaml"
-          ENV_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.dev.yaml"
-          VALUES_ARG=()
-          [ -f "$BASE_VALUES" ] && VALUES_ARG+=("-f" "$BASE_VALUES")
-          [ -f "$MAPPING_VALUES" ] && VALUES_ARG+=("-f" "$MAPPING_VALUES")
-          [ -f "$ENV_VALUES" ] && VALUES_ARG+=("-f" "$ENV_VALUES")
-          OWNER=$(echo "$REPO_OWNER_RAW" | tr '[:upper:]' '[:lower:]')
-          IMAGE_REPO="${INPUT_REGISTRY}/${OWNER}/${IMAGE_BASE}"
-          OVERLAYS=()
-          while IFS= read -r f; do
-            [[ -n "$f" ]] && OVERLAYS+=("-f" "$f")
-          done < <(am-pipelines-repo/scripts/ci/list-kind-overlays.sh dev "$IMAGE_BASE" || true)
-          helm upgrade --install "$RELEASE_NAME" am-pipelines-repo/helm/universal-chart \
-            --namespace "$INPUT_DEV_NAMESPACE" --create-namespace \
-            "${VALUES_ARG[@]}" "${OVERLAYS[@]}" \
-            --set "global.image.repository=${IMAGE_REPO}" \
-            --set "global.image.tag=${RUN_ID}" \
-            --wait --timeout 10m
-
-  # ============================================================
-  # PROD Helm BREAK-GLASS (default off). Prefer: promote + Argo
-  # ============================================================
-  deploy-prod:
-    name: Helm break-glass Prod (off)
-    needs: [build, vulnerability-scan, misconfig-scan, security-scan]
-    runs-on: [self-hosted, linux, x64, docker, vps-prod]
-    if: |
-      always() &&
-      inputs.image_name != '' && inputs.deploy_prod == true &&
-      needs.build.result == 'success' &&
-      (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
-      (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
-      (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
-    environment: ${{ inputs.gh_env_prod || format('prod-{0}', inputs.image_name) }}
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
-      - name: Checkout Universal Helm Chart
-        uses: actions/checkout@v4
-        with:
-          repository: AM-Portfolio/am-pipelines
-          path: am-pipelines-repo
-          ref: main
-          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
-          clean: true
-      - name: Select prod cluster kubeconfig (runner-local only)
-        shell: bash
-        env:
-          KUBECONFIG_PROD_B64: ${{ secrets.KUBECONFIG_PROD }}
-        run: |
-          chmod +x am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh
-          am-pipelines-repo/scripts/ci/select-cluster-kubeconfig.sh prod
-      - name: Resolve Prod release name
-        id: release_prod
-        shell: bash
-        env:
-          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
-        run: |
-          chmod +x am-pipelines-repo/scripts/ci/resolve-helm-release.sh
-          RELEASE=$(am-pipelines-repo/scripts/ci/resolve-helm-release.sh "$INPUT_IMAGE_NAME" prod)
-          BASE="${INPUT_IMAGE_NAME%-preprod}"
-          BASE="${BASE%-dev}"
-          BASE="${BASE%-prod}"
-          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
-          echo "base=$BASE" >> "$GITHUB_OUTPUT"
-      - name: Deploy to Prod via Helm
-        shell: bash
-        env:
-          INPUT_WORKING_DIRECTORY: ${{ inputs.working_directory }}
-          INPUT_PROD_NAMESPACE: ${{ inputs.prod_namespace }}
-          INPUT_REGISTRY: ${{ inputs.registry }}
-          RELEASE_NAME: ${{ steps.release_prod.outputs.release }}
-          IMAGE_BASE: ${{ steps.release_prod.outputs.base }}
-          REPO_OWNER_RAW: ${{ github.repository_owner }}
-          RUN_ID: ${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          echo "::warning::Break-glass prod Helm — prefer am gitops promote + Argo sync"
-          BASE_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.yaml"
-          MAPPING_VALUES="$INPUT_WORKING_DIRECTORY/helm/vault-mappings.yaml"
-          ENV_VALUES="$INPUT_WORKING_DIRECTORY/helm/values.prod.yaml"
-          VALUES_ARG=()
-          [ -f "$BASE_VALUES" ] && VALUES_ARG+=("-f" "$BASE_VALUES")
-          [ -f "$MAPPING_VALUES" ] && VALUES_ARG+=("-f" "$MAPPING_VALUES")
-          [ -f "$ENV_VALUES" ] && VALUES_ARG+=("-f" "$ENV_VALUES")
-          OWNER=$(echo "$REPO_OWNER_RAW" | tr '[:upper:]' '[:lower:]')
-          IMAGE_REPO="${INPUT_REGISTRY}/${OWNER}/${IMAGE_BASE}"
-          helm upgrade --install "$RELEASE_NAME" am-pipelines-repo/helm/universal-chart \
-            --namespace "$INPUT_PROD_NAMESPACE" --create-namespace \
-            "${VALUES_ARG[@]}" \
-            --set "global.image.repository=${IMAGE_REPO}" \
-            --set "global.image.tag=${RUN_ID}" \
-            --wait --timeout 10m
+          echo "::notice::Preprod: merge to main (auto Contabo Argo). Other envs: Manual Deploy workflow."

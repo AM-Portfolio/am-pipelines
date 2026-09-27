@@ -43,33 +43,34 @@ if echo "$RAW" | grep -qiE '"code":5|not found'; then
   exit 1
 fi
 
-# Cluster connection SoT: am-vps-nonprod Unknown/Failed ⇒ nonprod-dr active
+# Cluster connection SoT: am-vps-nonprod Unknown/Failed => nonprod-dr active
 CLUSTERS_JSON="$(argo_api GET "/api/v1/clusters" 2>/dev/null || echo '{}')"
 VPS_CONN="$(
-  echo "$CLUSTERS_JSON" | python3 -c '
-import json,sys
+  echo "$CLUSTERS_JSON" | python3 - <<'PY'
+import json, sys
 try:
-    d=json.load(sys.stdin)
+    d = json.load(sys.stdin)
 except Exception:
-    print(""); raise SystemExit(0)
-items=d.get("items") or d.get("clusters") or []
+    print("")
+    raise SystemExit(0)
+items = d.get("items") or d.get("clusters") or []
 if isinstance(d, list):
-    items=d
+    items = d
 for c in items:
-    name=(c.get("name") or "")
-    server=(c.get("server") or "")
+    name = c.get("name") or ""
+    server = c.get("server") or ""
     if name == "am-vps-nonprod" or "am-vps-nonprod" in server:
-        st=((c.get("connectionState") or {}).get("status") or "")
+        st = ((c.get("connectionState") or {}).get("status") or "")
         print(st)
         raise SystemExit(0)
 print("")
-' 2>/dev/null || true
+PY
 )"
 echo "nonprod cluster probe: am-vps-nonprod connection=${VPS_CONN:-unknown}"
 
 # --- nonprod-dr failover: ensure destination is laptop Kind when VPS is down ---
 DEST_PATCHED="$(
-  echo "$RAW" | ENV="$ENV" NONPROD_ORIGIN="${NONPROD_ORIGIN:-}" VPS_CONN="${VPS_CONN:-}" python3 -c '
+  echo "$RAW" | ENV="$ENV" NONPROD_ORIGIN="${NONPROD_ORIGIN:-}" VPS_CONN="${VPS_CONN:-}" python3 - <<'PY'
 import json, os, sys
 
 app = json.load(sys.stdin)
@@ -83,8 +84,9 @@ cur_ns = dest.get("namespace") or ""
 want_name = "am-dev-apps"
 want_ns = "am-apps-dev" if env == "dev" else "am-apps-preprod"
 
+
 def vps_unreachable():
-    # Contabo Kind offline → Argo reports Unknown/Failed (not Successful)
+    # Contabo Kind offline -> Argo reports Unknown/Failed (not Successful)
     if vps_conn and vps_conn != "Successful":
         return True
     st = app.get("status") or {}
@@ -92,7 +94,15 @@ def vps_unreachable():
     for c in conds:
         msg = ((c.get("message") or "") + " " + (c.get("type") or "")).lower()
         if "am-vps-nonprod" in msg and any(
-            x in msg for x in ("unreachable", "unavailable", "timeout", "connection refused", "i/o timeout", "eof")
+            x in msg
+            for x in (
+                "unreachable",
+                "unavailable",
+                "timeout",
+                "connection refused",
+                "i/o timeout",
+                "eof",
+            )
         ):
             return True
         if c.get("type") in ("ComparisonError", "InvalidSpecError") and "cluster" in msg:
@@ -101,6 +111,7 @@ def vps_unreachable():
     if cur_name == "am-vps-nonprod" and health in ("Unknown", "Missing"):
         return True
     return False
+
 
 force_dr = False
 reason = ""
@@ -115,13 +126,13 @@ elif cur_name == "am-dev-apps":
     reason = "Application already on am-dev-apps"
 elif origin != "vps" and vps_unreachable():
     force_dr = True
-    reason = f"am-vps-nonprod connection={vps_conn or 'down'} — failover nonprod-dr"
+    reason = "am-vps-nonprod connection=%s - failover nonprod-dr" % (vps_conn or "down")
 elif origin == "vps":
     force_dr = False
     reason = "NONPROD_ORIGIN=vps (keep Contabo nonprod-main)"
 else:
     force_dr = False
-    reason = f"keep destination name={cur_name or '(empty)'}"
+    reason = "keep destination name=%s" % (cur_name or "empty")
 
 changed = False
 if force_dr and (cur_name != want_name or cur_ns != want_ns):
@@ -130,14 +141,21 @@ if force_dr and (cur_name != want_name or cur_ns != want_ns):
     dest.pop("server", None)
     app.setdefault("spec", {})["destination"] = dest
     changed = True
-    print(f"RETARGET dest {cur_name}/{cur_ns} → {want_name}/{want_ns} ({reason})", file=sys.stderr)
+    print(
+        "RETARGET dest %s/%s -> %s/%s (%s)"
+        % (cur_name, cur_ns, want_name, want_ns, reason),
+        file=sys.stderr,
+    )
 elif force_dr:
-    print(f"OK dest already {want_name}/{want_ns} ({reason})", file=sys.stderr)
+    print("OK dest already %s/%s (%s)" % (want_name, want_ns, reason), file=sys.stderr)
 else:
-    print(f"OK dest unchanged name={cur_name} ns={cur_ns} ({reason})", file=sys.stderr)
+    print(
+        "OK dest unchanged name=%s ns=%s (%s)" % (cur_name, cur_ns, reason),
+        file=sys.stderr,
+    )
 
 json.dump({"app": app, "changed": changed}, sys.stdout)
-'
+PY
 )"
 CHANGED="$(echo "$DEST_PATCHED" | python3 -c 'import json,sys; print("1" if json.load(sys.stdin).get("changed") else "0")')"
 RAW="$(echo "$DEST_PATCHED" | python3 -c 'import json,sys; json.dump(json.load(sys.stdin)["app"], sys.stdout)')"
@@ -148,7 +166,7 @@ fi
 # Build Application PUT body + Sync body (sources with helm.parameters) so AppSet wipe
 # between PUT and sync cannot drop the tag for this sync operation.
 BUILT="$(
-  echo "$RAW" | TAG="$TAG" python3 -c '
+  echo "$RAW" | TAG="$TAG" python3 - <<'PY'
 import json, os, sys
 
 app = json.load(sys.stdin)
@@ -171,7 +189,8 @@ if idx < 0:
 src = dict(sources[idx])
 helm = dict(src.get("helm") or {})
 params = [
-    p for p in list(helm.get("parameters") or [])
+    p
+    for p in list(helm.get("parameters") or [])
     if (p.get("name") or "") not in ("global.image.tag", "global.image.digest")
 ]
 params.append({"name": "global.image.tag", "value": tag})
@@ -181,14 +200,13 @@ sources[idx] = src
 app["spec"]["sources"] = sources
 app.pop("status", None)
 
-# Sync body: force this sync to use the tagged sources (multi-source apps)
 sync_body = {
     "name": app["metadata"]["name"],
     "prune": False,
     "sources": sources,
 }
 json.dump({"app": app, "sync": sync_body}, sys.stdout)
-'
+PY
 )"
 
 PATCHED="$(echo "$BUILT" | python3 -c 'import json,sys; json.dump(json.load(sys.stdin)["app"], sys.stdout)')"
@@ -201,17 +219,17 @@ echo "OK: set helm parameters global.image.tag=${TAG} on ${APP} (no git commit)"
 sleep 2
 CHECK="$(argo_api GET "/api/v1/applications/${APP}" || true)"
 PARAM_NOW="$(
-  echo "$CHECK" | TAG="$TAG" python3 -c '
-import json,sys,os
-app=json.load(sys.stdin)
-want=os.environ["TAG"]
-got=""
+  echo "$CHECK" | TAG="$TAG" python3 - <<'PY'
+import json, sys, os
+app = json.load(sys.stdin)
+want = os.environ["TAG"]
+got = ""
 for s in (app.get("spec") or {}).get("sources") or []:
-  for p in ((s.get("helm") or {}).get("parameters") or []):
-    if p.get("name")=="global.image.tag":
-      got=p.get("value") or ""
+    for p in ((s.get("helm") or {}).get("parameters") or []):
+        if p.get("name") == "global.image.tag":
+            got = p.get("value") or ""
 print(got)
-' 2>/dev/null || true
+PY
 )"
 if [[ "$PARAM_NOW" != "$TAG" ]]; then
   echo "::warning::helm.parameters wiped after PUT (got=${PARAM_NOW:-empty}) — sync will still pass sources override with tag=${TAG}"
@@ -242,19 +260,17 @@ while (( attempt <= max )); do
     echo "::warning::sync failed talking to Contabo nonprod-main — forcing NONPROD_ORIGIN=local and retry"
     export NONPROD_ORIGIN=local
     export FAILOVER_RETRIED=1
-    # Re-enter by rewriting dest on PATCHED/SYNC and continue
-    PATCHED="$(echo "$PATCHED" | python3 -c '
-import json,sys
-app=json.load(sys.stdin)
-app.setdefault("spec",{})["destination"]={"name":"am-dev-apps","namespace":"am-apps-preprod"}
-json.dump(app,sys.stdout)
-')"
-    SYNC_BODY="$(echo "$SYNC_BODY" | python3 -c '
-import json,sys
-b=json.load(sys.stdin)
-# sync body may not include destination; PUT already set it
-json.dump(b,sys.stdout)
-')"
+    PATCHED="$(
+      echo "$PATCHED" | python3 - <<'PY'
+import json, sys
+app = json.load(sys.stdin)
+app.setdefault("spec", {})["destination"] = {
+    "name": "am-dev-apps",
+    "namespace": "am-apps-preprod",
+}
+json.dump(app, sys.stdout)
+PY
+    )"
     argo_api PUT "/api/v1/applications/${APP}" "$PATCHED" >/dev/null || true
     sleep 3
     attempt=$((attempt + 1))

@@ -111,20 +111,15 @@ jobs:
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
           echo "Helm release: $RELEASE (base=$BASE env=$INPUT_ENVIRONMENT)"
 
-      - name: Push ci-image.yaml on feature branch (preprod)
+      - name: Skip ci-image bot commit (retired — caused CI loops)
         if: |
           inputs.environment == 'preprod' &&
           inputs.git_ref != '' &&
           inputs.git_ref != 'main' &&
           inputs.git_ref != 'master'
-        shell: bash
-        env:
-          INPUT_WORKING_DIRECTORY: ${{ inputs.working_directory }}
-          INPUT_GIT_REF: ${{ inputs.git_ref }}
-          IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
-          chmod +x am-pipelines-repo/scripts/ci/write-and-push-ci-image.sh
-          am-pipelines-repo/scripts/ci/write-and-push-ci-image.sh
+          echo "::notice::ci-image.yaml push retired. Image tag=${{ inputs.image_tag }} is in GHCR only."
+          echo "::notice::Use am-gitops pins + Contabo Argo; do not commit tags into the service repo."
 
       - name: Align Argo feature-branch (preprod)
         if: |

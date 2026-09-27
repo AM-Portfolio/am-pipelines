@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Roll dev/preprod image via Contabo Argo API helm parameters — NO gitops / service commits.
-# Sets global.image.tag on the Application chart source, syncs, waits Healthy with that tag.
+# Roll dig/preprod image via Contabo Argo API helm parameters — NO gitops / service commits.
+# Sets global.image.tag on the Application chart source, syncs (with same sources override),
+# waits Healthy with that tag evidenced in syncResult/images or helm param.
 #
 # Env:
 #   INPUT_SERVICE_NAME  e.g. am-api-gateway
-#   INPUT_ENVIRONMENT   dev|preprod
+#   INPUT_ENVIRONMENT   dig|preprod
 #   INPUT_IMAGE_TAG     GHCR tag (usually github.run_id)
 #   ARGOCD_AUTH_TOKEN   Contabo token (required)
 # Optional: ARGOCD_SERVER, WAIT_HEALTH_SECONDS
@@ -35,7 +36,9 @@ if echo "$RAW" | grep -qiE '"code":5|not found'; then
   exit 1
 fi
 
-PATCHED="$(
+# Build Application PUT body + Sync body (sources with helm.parameters) so AppSet wipe
+# between PUT and sync cannot drop the tag for this sync operation.
+BUILT="$(
   echo "$RAW" | TAG="$TAG" python3 -c '
 import json, os, sys
 
@@ -58,25 +61,85 @@ if idx < 0:
 
 src = dict(sources[idx])
 helm = dict(src.get("helm") or {})
-params = list(helm.get("parameters") or [])
 params = [
-    p for p in params
+    p for p in list(helm.get("parameters") or [])
     if (p.get("name") or "") not in ("global.image.tag", "global.image.digest")
 ]
 params.append({"name": "global.image.tag", "value": tag})
-params.append({"name": "global.image.digest", "value": ""})
 helm["parameters"] = params
 src["helm"] = helm
 sources[idx] = src
 app["spec"]["sources"] = sources
 app.pop("status", None)
-json.dump(app, sys.stdout)
+
+# Sync body: force this sync to use the tagged sources (multi-source apps)
+sync_body = {
+    "name": app["metadata"]["name"],
+    "prune": False,
+    "sources": sources,
+}
+json.dump({"app": app, "sync": sync_body}, sys.stdout)
 '
 )"
+
+PATCHED="$(echo "$BUILT" | python3 -c 'import json,sys; json.dump(json.load(sys.stdin)["app"], sys.stdout)')"
+SYNC_BODY="$(echo "$BUILT" | python3 -c 'import json,sys; json.dump(json.load(sys.stdin)["sync"], sys.stdout)')"
 
 argo_api PUT "/api/v1/applications/${APP}" "$PATCHED" >/dev/null
 echo "OK: set helm parameters global.image.tag=${TAG} on ${APP} (no git commit)"
 
+# Confirm param survived immediate AppSet reconcile (best-effort)
+sleep 2
+CHECK="$(argo_api GET "/api/v1/applications/${APP}" || true)"
+PARAM_NOW="$(
+  echo "$CHECK" | TAG="$TAG" python3 -c '
+import json,sys,os
+app=json.load(sys.stdin)
+want=os.environ["TAG"]
+got=""
+for s in (app.get("spec") or {}).get("sources") or []:
+  for p in ((s.get("helm") or {}).get("parameters") or []):
+    if p.get("name")=="global.image.tag":
+      got=p.get("value") or ""
+print(got)
+' 2>/dev/null || true
+)"
+if [[ "$PARAM_NOW" != "$TAG" ]]; then
+  echo "::warning::helm.parameters wiped after PUT (got=${PARAM_NOW:-empty}) — sync will still pass sources override with tag=${TAG}"
+  # Re-PUT once more before sync
+  argo_api PUT "/api/v1/applications/${APP}" "$PATCHED" >/dev/null || true
+else
+  echo "OK: helm.parameters still present global.image.tag=${PARAM_NOW}"
+fi
+
+# Sync with sources override (retries for in-progress)
+errf="$(mktemp)"
+attempt=1
+max=15
+while (( attempt <= max )); do
+  if argo_api POST "/api/v1/applications/${APP}/sync" "$SYNC_BODY" >/dev/null 2>"$errf"; then
+    echo "OK: sync ${APP} with helm global.image.tag=${TAG}"
+    break
+  fi
+  err="$(cat "$errf" 2>/dev/null || true)"
+  if echo "$err" | grep -qiE 'already in progress|"code":9'; then
+    echo "::warning::sync ${APP}: another operation in progress — retry ${attempt}/${max}"
+    sleep $(( 2 + attempt ))
+    attempt=$((attempt + 1))
+    continue
+  fi
+  cat "$errf" >&2 || true
+  rm -f "$errf"
+  exit 1
+done
+rm -f "$errf"
+if (( attempt > max )); then
+  echo "::error::sync ${APP} still blocked after ${max} retries"
+  exit 1
+fi
+
 export STRICT_IMAGE_TAG=1
+# Skip internal refresh+sync — we already synced with sources override
+export SKIP_REFRESH_SYNC=1
 argo_sync_and_wait_healthy "$APP" "$TAG"
 echo "::notice::OK ${APP} rolled to tag=${TAG} via Contabo API (no am-gitops / service commit)"

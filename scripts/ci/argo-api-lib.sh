@@ -72,46 +72,97 @@ argo_sync() {
 
 # Refresh+sync then poll until Healthy. Optional EXPECT_TAG substring in live images.
 # Env: WAIT_HEALTH_SECONDS (default 600 — rollouts often need >5m for probes)
+#      STRICT_IMAGE_TAG=1 — require expect_tag evidence before success:
+#        - status.summary.images / resource images contain the tag, OR
+#        - Healthy+Synced and helm param global.image.tag matches (Contabo often
+#          leaves summary.images empty even when the roll applied)
 # Success = health Healthy (live deploy). Synced is preferred but OutOfSync alone does not fail.
 # Fail immediately on Missing; fail at timeout if not Healthy.
 argo_sync_and_wait_healthy() {
   local app="$1"
   local expect_tag="${2:-}"
   local wait_health="${WAIT_HEALTH_SECONDS:-600}"
-  local last_health="" last_sync="" last_images=""
+  local last_health="" last_sync="" last_images="" last_param_tag=""
   local outofsync_retried=0
 
-  argo_refresh_hard "$app" || true
-  # Give auto-sync / refresh a moment before requesting an explicit sync
-  sleep 5
-  argo_sync "$app"
+  if [[ "${SKIP_REFRESH_SYNC:-0}" != "1" ]]; then
+    argo_refresh_hard "$app" || true
+    # Give auto-sync / refresh a moment before requesting an explicit sync
+    sleep 5
+    argo_sync "$app"
+  else
+    echo "Skipping refresh+sync (caller already synced with overrides)"
+  fi
 
   echo "Waiting for ${app} Healthy (up to ${wait_health}s)..."
   local health_deadline=$((SECONDS + wait_health))
   while (( SECONDS < health_deadline )); do
-    local raw health sync images
+    local raw health sync images param_tag tag_ok
     raw="$(argo_api GET "/api/v1/applications/${app}" || true)"
     if [[ -z "$raw" ]]; then
       sleep 8
       continue
     fi
-    health="$(python3 -c 'import json,sys; d=json.load(sys.stdin); print(((d.get("status") or {}).get("health") or {}).get("status") or "")' <<<"$raw")"
-    sync="$(python3 -c 'import json,sys; d=json.load(sys.stdin); print(((d.get("status") or {}).get("sync") or {}).get("status") or "")' <<<"$raw")"
-    images="$(python3 -c 'import json,sys; d=json.load(sys.stdin); print(",".join(((d.get("status") or {}).get("summary") or {}).get("images") or []))' <<<"$raw")"
+    # Parse health/sync/images/helm-param in one python pass
+    # images: summary.images + any status.resources[].images; param_tag: global.image.tag helm param
+    read -r health sync images param_tag <<<"$(
+      python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+st = d.get("status") or {}
+health = ((st.get("health") or {}).get("status") or "")
+sync = ((st.get("sync") or {}).get("status") or "")
+imgs = list(((st.get("summary") or {}).get("images") or []))
+for r in (st.get("resources") or []):
+    for im in (r.get("images") or []):
+        if im and im not in imgs:
+            imgs.append(im)
+# Contabo often leaves summary.images empty; syncResult.resources[].images has the truth
+op = ((st.get("operationState") or {}).get("syncResult") or {})
+for r in (op.get("resources") or []):
+    for im in (r.get("images") or []):
+        if im and im not in imgs:
+            imgs.append(im)
+for im in (op.get("images") or []):
+    if im and im not in imgs:
+        imgs.append(im)
+param_tag = ""
+for src in ((d.get("spec") or {}).get("sources") or []):
+    for p in ((src.get("helm") or {}).get("parameters") or []):
+        if (p.get("name") or "") == "global.image.tag":
+            param_tag = p.get("value") or ""
+print(health, sync, ",".join(imgs), param_tag)
+' <<<"$raw"
+    )"
     last_health="$health"
     last_sync="$sync"
     last_images="$images"
-    echo "status health=${health} sync=${sync} images=${images}"
+    last_param_tag="$param_tag"
+    echo "status health=${health} sync=${sync} images=${images} helm.global.image.tag=${param_tag}"
 
     if [[ "$health" == "Missing" ]]; then
       echo "::error::${app} health=Missing sync=${sync} — deploy failed"
       return 1
     fi
 
+    tag_ok=0
+    if [[ -z "$expect_tag" ]]; then
+      tag_ok=1
+    elif [[ -n "$images" && "$images" == *"$expect_tag"* ]]; then
+      tag_ok=1
+    elif [[ -z "$images" && -n "$param_tag" && "$param_tag" == "$expect_tag" && "$sync" == "Synced" ]]; then
+      # Contabo multi-source apps often omit summary.images; only trust helm param when images empty
+      tag_ok=1
+    fi
+    # If images are present but show a different tag, never treat as ok
+    if [[ -n "$expect_tag" && -n "$images" && "$images" != *"$expect_tag"* ]]; then
+      tag_ok=0
+    fi
+
     if [[ "$health" == "Healthy" ]]; then
-      if [[ -n "$expect_tag" && "$images" != *"$expect_tag"* ]]; then
+      if [[ -n "$expect_tag" && "$tag_ok" != "1" ]]; then
         if [[ "${STRICT_IMAGE_TAG:-0}" == "1" ]]; then
-          echo "::warning::App Healthy but live images missing tag=${expect_tag} (${images}) — keep waiting (STRICT_IMAGE_TAG=1)"
+          echo "::warning::App Healthy but tag=${expect_tag} not evidenced yet (images=${images} param=${param_tag}) — keep waiting"
           sleep 10
           continue
         fi
@@ -120,7 +171,11 @@ argo_sync_and_wait_healthy() {
         fi
       fi
       if [[ "$sync" == "Synced" ]]; then
-        echo "::notice::OK ${app} Healthy/Synced"
+        if [[ -n "$expect_tag" && "$tag_ok" == "1" && -z "$images" ]]; then
+          echo "::notice::OK ${app} Healthy/Synced (tag=${expect_tag} via helm param; summary.images empty)"
+        else
+          echo "::notice::OK ${app} Healthy/Synced"
+        fi
         return 0
       fi
       # Healthy but OutOfSync: one re-sync, then accept Healthy (do not fail CI)
@@ -132,6 +187,11 @@ argo_sync_and_wait_healthy() {
         sleep 10
         continue
       fi
+      if [[ "${STRICT_IMAGE_TAG:-0}" == "1" && "$tag_ok" != "1" ]]; then
+        echo "::warning::${app} Healthy sync=${sync} but tag not evidenced — keep waiting"
+        sleep 10
+        continue
+      fi
       echo "::warning::${app} Healthy but still sync=${sync} — accepting as deploy success"
       echo "::notice::OK ${app} Healthy (sync=${sync})"
       return 0
@@ -140,8 +200,8 @@ argo_sync_and_wait_healthy() {
     # Progressing / Degraded / Unknown: keep polling until timeout
     sleep 10
   done
-  if [[ "${STRICT_IMAGE_TAG:-0}" == "1" && -n "$expect_tag" && "$last_images" != *"$expect_tag"* ]]; then
-    echo "::error::${app} wait-healthy timeout after ${wait_health}s — live images never showed tag=${expect_tag} (health=${last_health} sync=${last_sync} images=${last_images})"
+  if [[ "${STRICT_IMAGE_TAG:-0}" == "1" && -n "$expect_tag" ]]; then
+    echo "::error::${app} wait-healthy timeout after ${wait_health}s — tag=${expect_tag} not evidenced (health=${last_health} sync=${last_sync} images=${last_images} param=${last_param_tag})"
   else
     echo "::error::${app} wait-healthy timeout after ${wait_health}s — last health=${last_health} sync=${last_sync} images=${last_images}"
   fi

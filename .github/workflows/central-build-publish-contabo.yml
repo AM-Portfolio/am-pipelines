@@ -382,7 +382,8 @@ jobs:
 
   contabo-approve:
     name: Contabo Argo → ${{ matrix.env }} (approve)
-    needs: [build, vulnerability-scan, misconfig-scan, security-scan]
+    # Wait for Auto sync on main so preprod Approve does not race the same Application.
+    needs: [build, vulnerability-scan, misconfig-scan, security-scan, auto-sync-preprod]
     if: |
       always() &&
       inputs.image_name != '' &&
@@ -391,6 +392,7 @@ jobs:
       (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
       (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
       (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped') &&
+      (needs.auto-sync-preprod.result == 'success' || needs.auto-sync-preprod.result == 'skipped') &&
       (
         (github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')) ||
         (github.head_ref || github.ref_name) == 'develop' ||

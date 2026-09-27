@@ -139,6 +139,16 @@ on:
       KUBECONFIG_PROD:
         required: false
         description: "DEPRECATED — refused by CI. Prod = promote + Argo only."
+    outputs:
+      image_tag:
+        description: "Published GHCR image tag (run id)"
+        value: ${{ jobs.build.outputs.image_tag }}
+      image_digest:
+        description: "Published image digest"
+        value: ${{ jobs.build.outputs.image_digest }}
+      image_repository:
+        description: "Published image repository"
+        value: ${{ jobs.build.outputs.image_repository }}
 
 jobs:
   # ============================================================
@@ -552,7 +562,7 @@ jobs:
   # Runner-local kubeconfig only — GitHub kubeconfig secrets refused.
   # ============================================================
   deploy-preprod:
-    name: Deploy → Preprod (Helm break-glass)
+    name: Helm break-glass Preprod (off)
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
     runs-on: [self-hosted, linux, x64, docker, preprod]
     if: |
@@ -647,7 +657,7 @@ jobs:
   # DEV Helm BREAK-GLASS (default off). Prefer: am gitops set-tag --env dev
   # ============================================================
   deploy-dev:
-    name: Deploy → Dev (Helm break-glass)
+    name: Helm break-glass Dev (off)
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
     if: |
       always() &&
@@ -731,7 +741,7 @@ jobs:
   # PROD Helm BREAK-GLASS (default off). Prefer: promote + Argo
   # ============================================================
   deploy-prod:
-    name: Deploy → Prod (Helm break-glass)
+    name: Helm break-glass Prod (off)
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
     runs-on: [self-hosted, linux, x64, docker, vps-prod]
     if: |

@@ -595,4 +595,4 @@ jobs:
         run: |
           TAG="${{ needs.build.outputs.image_tag || github.run_id }}"
           echo "::notice::Image published to GHCR tag=${TAG}. No ci-image.yaml commit (avoids CI loops)."
-          echo "::notice::Preprod: merge to main (auto Contabo Argo). Other envs: Manual Deploy workflow."
+          echo "::notice::Contabo dev/preprod: Approve the Contabo Argo jobs on this Publish workflow (no merge required). Main adds prod/dr Approve."

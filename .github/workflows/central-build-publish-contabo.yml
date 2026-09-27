@@ -436,11 +436,18 @@ jobs:
         env:
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
+          # Optional: force nonprod-dr (local) or nonprod-main (vps). Empty = auto
+          # (dev always am-dev-apps; preprod retargets when am-vps-nonprod ≠ Successful).
+          NONPROD_ORIGIN: ${{ vars.NONPROD_ORIGIN || '' }}
           INPUT_SERVICE_NAME: ${{ inputs.image_name }}
           INPUT_ENVIRONMENT: ${{ matrix.env }}
           INPUT_IMAGE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
+          if [[ -z "${ARGOCD_AUTH_TOKEN:-}" || -z "${ARGOCD_SERVER:-}" ]]; then
+            echo "::error::GitHub Environment '${{ matrix.env }}' missing ARGOCD_AUTH_TOKEN / ARGOCD_SERVER (Contabo Argo). Set both on Environments dig and preprod."
+            exit 1
+          fi
           chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh
           chmod +x am-pipelines-repo/scripts/ci/argo-roll-image-and-wait.sh
           am-pipelines-repo/scripts/ci/argo-roll-image-and-wait.sh

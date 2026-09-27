@@ -13,8 +13,8 @@
 # Optional:
 #   ARGOCD_SERVER, WAIT_HEALTH_SECONDS
 #   NONPROD_ORIGIN=local|vps  (default: auto — dev always am-dev-apps;
-#     preprod retargets to am-dev-apps when already there, NONPROD_ORIGIN=local,
-#     or am-vps-nonprod looks Unreachable)
+#     preprod retargets when already on am-dev-apps, NONPROD_ORIGIN=local,
+#     or Argo cluster am-vps-nonprod connection != Successful)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -43,14 +43,39 @@ if echo "$RAW" | grep -qiE '"code":5|not found'; then
   exit 1
 fi
 
+# Cluster connection SoT: am-vps-nonprod Unknown/Failed ⇒ nonprod-dr active
+CLUSTERS_JSON="$(argo_api GET "/api/v1/clusters" 2>/dev/null || echo '{}')"
+VPS_CONN="$(
+  echo "$CLUSTERS_JSON" | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    print(""); raise SystemExit(0)
+items=d.get("items") or d.get("clusters") or []
+if isinstance(d, list):
+    items=d
+for c in items:
+    name=(c.get("name") or "")
+    server=(c.get("server") or "")
+    if name == "am-vps-nonprod" or "am-vps-nonprod" in server:
+        st=((c.get("connectionState") or {}).get("status") or "")
+        print(st)
+        raise SystemExit(0)
+print("")
+' 2>/dev/null || true
+)"
+echo "nonprod cluster probe: am-vps-nonprod connection=${VPS_CONN:-unknown}"
+
 # --- nonprod-dr failover: ensure destination is laptop Kind when VPS is down ---
 DEST_PATCHED="$(
-  echo "$RAW" | ENV="$ENV" NONPROD_ORIGIN="${NONPROD_ORIGIN:-}" python3 -c '
+  echo "$RAW" | ENV="$ENV" NONPROD_ORIGIN="${NONPROD_ORIGIN:-}" VPS_CONN="${VPS_CONN:-}" python3 -c '
 import json, os, sys
 
 app = json.load(sys.stdin)
 env = os.environ["ENV"]
 origin = (os.environ.get("NONPROD_ORIGIN") or "").strip().lower()
+vps_conn = (os.environ.get("VPS_CONN") or "").strip()
 dest = dict((app.get("spec") or {}).get("destination") or {})
 cur_name = dest.get("name") or ""
 cur_ns = dest.get("namespace") or ""
@@ -59,6 +84,9 @@ want_name = "am-dev-apps"
 want_ns = "am-apps-dev" if env == "dev" else "am-apps-preprod"
 
 def vps_unreachable():
+    # Contabo Kind offline → Argo reports Unknown/Failed (not Successful)
+    if vps_conn and vps_conn != "Successful":
+        return True
     st = app.get("status") or {}
     conds = st.get("conditions") or []
     for c in conds:
@@ -85,9 +113,9 @@ elif origin == "local":
 elif cur_name == "am-dev-apps":
     force_dr = True
     reason = "Application already on am-dev-apps"
-elif cur_name == "am-vps-nonprod" and origin != "vps" and vps_unreachable():
+elif origin != "vps" and vps_unreachable():
     force_dr = True
-    reason = "am-vps-nonprod Unreachable — failover nonprod-dr"
+    reason = f"am-vps-nonprod connection={vps_conn or 'down'} — failover nonprod-dr"
 elif origin == "vps":
     force_dr = False
     reason = "NONPROD_ORIGIN=vps (keep Contabo nonprod-main)"

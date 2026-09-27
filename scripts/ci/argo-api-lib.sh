@@ -1,6 +1,6 @@
 # Argo CD REST helpers for GitHub Actions (no kubeconfig).
-# Contabo only (prod/DR): ARGOCD_AUTH_TOKEN + ARGOCD_SERVER (default https://argocd.asrax.in)
-# Preprod/dev: do not call these helpers — no Contabo Applications for nonprod.
+# Contabo Argo (https://argocd.asrax.in) for all envs.
+# Env: ARGOCD_AUTH_TOKEN (required), ARGOCD_SERVER (default https://argocd.asrax.in)
 # Usage: source this file, then argo_api METHOD PATH [JSON_BODY]
 set -euo pipefail
 
@@ -18,7 +18,7 @@ argo_api() {
   local method="$1" path="$2" body="${3:-}"
   argo_require_token
   local url="${ARGOCD_SERVER}${path}"
-  local args=(-sS -X "$method" -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" -H "Content-Type: application/json" -H "User-Agent: am-pipelines-ci")
+  local args=(-sS -f -X "$method" -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" -H "Content-Type: application/json" -H "User-Agent: am-pipelines-ci")
   if [[ -n "$body" ]]; then
     args+=(-d "$body")
   fi

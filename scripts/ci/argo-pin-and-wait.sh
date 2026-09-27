@@ -11,7 +11,7 @@
 #   GH_TOKEN            for gh workflow run / watch
 # Optional:
 #   WAIT_PIN_SECONDS    default 180
-#   WAIT_HEALTH_SECONDS default 300
+#   WAIT_HEALTH_SECONDS default 600
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

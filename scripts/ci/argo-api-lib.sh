@@ -47,13 +47,13 @@ argo_sync() {
 }
 
 # Refresh+sync then poll until Healthy. Optional EXPECT_TAG substring in live images.
-# Env: WAIT_HEALTH_SECONDS (default 300)
+# Env: WAIT_HEALTH_SECONDS (default 600 — rollouts often need >5m for probes)
 # Success = health Healthy (live deploy). Synced is preferred but OutOfSync alone does not fail.
 # Fail immediately on Missing; fail at timeout if not Healthy.
 argo_sync_and_wait_healthy() {
   local app="$1"
   local expect_tag="${2:-}"
-  local wait_health="${WAIT_HEALTH_SECONDS:-300}"
+  local wait_health="${WAIT_HEALTH_SECONDS:-600}"
   local last_health="" last_sync="" last_images=""
   local outofsync_retried=0
 

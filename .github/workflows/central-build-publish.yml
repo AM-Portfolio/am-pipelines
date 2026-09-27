@@ -499,15 +499,16 @@ jobs:
   # ============================================================
   # CONTABO ARGO — sync+wait preprod after main pin (fail if not Healthy)
   # ============================================================
+  # Skipped when caller sets contabo_wait_preprod: false (gateways run Contabo in parallel approve jobs).
   argo-preprod:
-    name: Contabo Argo → preprod
+    name: Contabo Argo → preprod (central)
     needs: [build, gitops-preprod]
     runs-on: ubuntu-latest
     if: |
       always() &&
       inputs.image_name != '' &&
       inputs.gitops_write_preprod == true &&
-      inputs.contabo_wait_preprod == true &&
+      inputs.contabo_wait_preprod &&
       (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') &&
       needs.build.result == 'success' &&
       needs.gitops-preprod.result == 'success'

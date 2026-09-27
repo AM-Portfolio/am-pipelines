@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Roll dev/preprod image via Argo API helm parameters — NO gitops / service commits.
-# Dig → local Argo (ARGOCD_SERVER_DEV + ARGOCD_AUTH_TOKEN_DEV).
-# Preprod → Contabo Argo (ARGOCD_SERVER + ARGOCD_AUTH_TOKEN).
+# Roll dig/preprod image via Contabo Argo API helm parameters — NO gitops / service commits.
+# Sets global.image.tag on the Application chart source, syncs (with same sources override),
+# waits Healthy with that tag evidenced in syncResult/images or helm param.
 #
 # Env:
 #   INPUT_SERVICE_NAME  e.g. am-api-gateway
-#   INPUT_ENVIRONMENT   dev|preprod
+#   INPUT_ENVIRONMENT   dig|preprod
 #   INPUT_IMAGE_TAG     GHCR tag (usually github.run_id)
-#   ARGOCD_AUTH_TOKEN / ARGOCD_AUTH_TOKEN_DEV
-# Optional: ARGOCD_SERVER, ARGOCD_SERVER_DEV, WAIT_HEALTH_SECONDS
+#   ARGOCD_AUTH_TOKEN   Contabo token (required)
+# Optional: ARGOCD_SERVER, WAIT_HEALTH_SECONDS
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,12 +28,11 @@ case "$ENV" in
     ;;
 esac
 
-argo_select_env "$ENV"
-echo "Argo roll image (no gitops commit): env=${ENV} server=${ARGOCD_SERVER} app=${APP} tag=${TAG}"
+echo "Contabo roll image (no gitops commit): app=${APP} tag=${TAG}"
 
 RAW="$(argo_api GET "/api/v1/applications/${APP}")"
 if echo "$RAW" | grep -qiE '"code":5|not found'; then
-  echo "::error::Application ${APP} not found on ${ARGOCD_SERVER}"
+  echo "::error::Application ${APP} not found on Contabo"
   exit 1
 fi
 

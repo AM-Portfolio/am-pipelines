@@ -431,13 +431,11 @@ jobs:
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
-      - name: Argo roll image + wait (dev → local Argo / preprod → Contabo)
+      - name: Argo roll image + wait (dev/preprod → Contabo)
         if: matrix.env == 'dev' || matrix.env == 'preprod'
         env:
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
-          ARGOCD_AUTH_TOKEN_DEV: ${{ secrets.ARGOCD_AUTH_TOKEN_DEV }}
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
-          ARGOCD_SERVER_DEV: ${{ secrets.ARGOCD_SERVER_DEV }}
           INPUT_SERVICE_NAME: ${{ inputs.image_name }}
           INPUT_ENVIRONMENT: ${{ matrix.env }}
           INPUT_IMAGE_TAG: ${{ steps.tag.outputs.tag }}

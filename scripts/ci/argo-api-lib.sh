@@ -1,9 +1,8 @@
 # Argo CD REST helpers for GitHub Actions (no kubeconfig).
-# Dig → local Argo (ARGOCD_SERVER_DEV / ARGOCD_AUTH_TOKEN_DEV).
-# Preprod/prod/dr → Contabo Argo (ARGOCD_SERVER / ARGOCD_AUTH_TOKEN).
-# Env: ARGOCD_AUTH_TOKEN (or ARGOCD_AUTH_TOKEN_DEV for dig), ARGOCD_SERVER (default https://argocd.asrax.in)
+# dev/preprod/prod/dr → Contabo Argo (ARGOCD_SERVER / ARGOCD_AUTH_TOKEN).
+# Env: ARGOCD_AUTH_TOKEN, ARGOCD_SERVER (default https://argocd.asrax.in)
 # Usage: source this file, then argo_api METHOD PATH [JSON_BODY]
-# Optional before calls: argo_select_env dig|preprod|prod|dr
+# Optional before calls: argo_select_env dev|preprod|prod|dr
 set -euo pipefail
 
 ARGOCD_SERVER="${ARGOCD_SERVER:-https://argocd.asrax.in}"
@@ -12,16 +11,8 @@ ARGOCD_SERVER="${ARGOCD_SERVER%/}"
 argo_select_env() {
   local env="${1:-}"
   case "$env" in
-    dev)
-      if [[ -n "${ARGOCD_SERVER_DEV:-}" ]]; then
-        ARGOCD_SERVER="${ARGOCD_SERVER_DEV%/}"
-      fi
-      if [[ -n "${ARGOCD_AUTH_TOKEN_DEV:-}" ]]; then
-        ARGOCD_AUTH_TOKEN="${ARGOCD_AUTH_TOKEN_DEV}"
-      fi
-      ;;
-    preprod|prod|dr|"")
-      # keep Contabo defaults / already-exported ARGOCD_SERVER + ARGOCD_AUTH_TOKEN
+    dev|preprod|prod|dr|"")
+      # Contabo Argo for all envs (including dev) — never route to laptop local Argo
       ARGOCD_SERVER="${ARGOCD_SERVER:-https://argocd.asrax.in}"
       ARGOCD_SERVER="${ARGOCD_SERVER%/}"
       ;;

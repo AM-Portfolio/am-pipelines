@@ -516,7 +516,7 @@ jobs:
       inputs.image_name != '' &&
       inputs.gitops_write_preprod == true &&
       inputs.contabo_wait_preprod &&
-      !inputs.contabo_approve &&
+      inputs.contabo_approve != true &&
       (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') &&
       needs.build.result == 'success' &&
       needs.gitops-preprod.result == 'success'
@@ -638,7 +638,6 @@ jobs:
     environment: ${{ matrix.env }}
     permissions:
       contents: read
-      actions: write
     steps:
       - name: Checkout am-pipelines scripts
         uses: actions/checkout@v4

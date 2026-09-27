@@ -404,6 +404,7 @@ jobs:
       always() &&
       inputs.image_name != '' &&
       inputs.gitops_write_preprod == true &&
+      inputs.contabo_approve != true &&
       (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') &&
       needs.build.result == 'success' &&
       (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
@@ -580,39 +581,12 @@ jobs:
           exit-code: "0" # Non-blocking (reports but continues)
 
   # ============================================================
-  # FEATURE BRANCH — GHCR publish only (no ci-image bot commits)
-  # Writing helm/ci-image.yaml onto the feature branch retriggered CI loops.
+  # AUTO SYNC PREPROD — Contabo refresh only (NO am-gitops commit)
+  # Top rail when contabo_approve: sync live app; pin happens on Approve.
   # ============================================================
-  preprod-feature-argo:
-    name: Feature → GHCR only (no bot commit)
+  auto-sync-preprod:
+    name: Auto sync → preprod (no gitops commit)
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
-    runs-on: ubuntu-latest
-    if: |
-      always() &&
-      inputs.image_name != '' && inputs.deploy_preprod == true &&
-      github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' &&
-      needs.build.result == 'success' &&
-      (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
-      (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
-      (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
-    permissions:
-      contents: read
-      packages: read
-    steps:
-      - name: Notice — image published; no service-repo bot commit
-        run: |
-          TAG="${{ needs.build.outputs.image_tag || github.run_id }}"
-          echo "::notice::Image published to GHCR tag=${TAG}. No ci-image.yaml commit (avoids CI loops)."
-          echo "::notice::Contabo dev/preprod Approve: sibling jobs after Build on this workflow (no merge). Main adds prod/dr."
-
-  # ============================================================
-  # CONTABO APPROVE — parallel after Build (sibling of Feature / GitOps)
-  # Environment gate only. Never builds images. Uses build image_tag.
-  # ============================================================
-  contabo-approve:
-    name: Contabo Argo → ${{ matrix.env }} (approve)
-    needs: [build, vulnerability-scan, misconfig-scan, security-scan]
-    # push or PR; main = all four; feature/fix/hotfix/develop/feat = dev+preprod only.
     if: |
       always() &&
       inputs.contabo_approve == true &&
@@ -630,12 +604,7 @@ jobs:
         startsWith(github.head_ref || github.ref_name, 'fix/') ||
         startsWith(github.head_ref || github.ref_name, 'hotfix/')
       )
-    strategy:
-      fail-fast: false
-      matrix:
-        env: ${{ fromJSON((github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')) && '["dev","preprod","prod","dr"]' || '["dev","preprod"]') }}
     runs-on: ubuntu-latest
-    environment: ${{ matrix.env }}
     permissions:
       contents: read
     steps:
@@ -660,11 +629,7 @@ jobs:
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
-      - name: Contabo sync + wait (preprod — pin already on main)
-        if: |
-          matrix.env == 'preprod' &&
-          github.event_name == 'push' &&
-          (github.ref_name == 'main' || github.ref_name == 'master')
+      - name: Contabo sync + wait (no pin write)
         env:
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
@@ -673,15 +638,149 @@ jobs:
           INPUT_IMAGE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
-          sleep 5
+          echo "::notice::Auto sync Contabo preprod — no am-gitops commit. New tag deploys after Contabo Approve."
           chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh
           chmod +x am-pipelines-repo/scripts/ci/argo-sync-and-wait.sh
           am-pipelines-repo/scripts/ci/argo-sync-and-wait.sh
 
-      - name: Contabo pin + wait (preprod — feature / PR)
-        if: |
-          matrix.env == 'preprod' &&
-          (github.event_name != 'push' || (github.ref_name != 'main' && github.ref_name != 'master'))
+  # ============================================================
+  # CONTABO APPROVE — dev (above Feature on graph)
+  # ============================================================
+  contabo-dev:
+    name: Contabo Argo → dev (approve)
+    needs: [build, vulnerability-scan, misconfig-scan, security-scan]
+    if: |
+      always() &&
+      inputs.contabo_approve == true &&
+      inputs.image_name != '' &&
+      (github.event_name == 'push' || github.event_name == 'pull_request') &&
+      needs.build.result == 'success' &&
+      (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
+      (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
+      (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped') &&
+      (
+        (github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')) ||
+        (github.head_ref || github.ref_name) == 'develop' ||
+        startsWith(github.head_ref || github.ref_name, 'feature/') ||
+        startsWith(github.head_ref || github.ref_name, 'feat/') ||
+        startsWith(github.head_ref || github.ref_name, 'fix/') ||
+        startsWith(github.head_ref || github.ref_name, 'hotfix/')
+      )
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout am-pipelines scripts
+        uses: actions/checkout@v4
+        with:
+          repository: AM-Portfolio/am-pipelines
+          path: am-pipelines-repo
+          ref: main
+          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image tag
+        id: tag
+        env:
+          TAG_FROM_BUILD: ${{ needs.build.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          TAG="${TAG_FROM_BUILD:-}"
+          if [[ -z "$TAG" ]]; then
+            echo "::error::No image tag from build"
+            exit 1
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Contabo pin + wait (dev)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
+          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
+          INPUT_SERVICE_NAME: ${{ inputs.image_name }}
+          INPUT_ENVIRONMENT: dev
+          INPUT_IMAGE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh
+          chmod +x am-pipelines-repo/scripts/ci/argo-pin-and-wait.sh
+          am-pipelines-repo/scripts/ci/argo-pin-and-wait.sh
+
+  # ============================================================
+  # FEATURE BRANCH — GHCR publish only (no ci-image bot commits)
+  # ============================================================
+  preprod-feature-argo:
+    name: Feature → GHCR only (no bot commit)
+    needs: [build, vulnerability-scan, misconfig-scan, security-scan]
+    runs-on: ubuntu-latest
+    if: |
+      always() &&
+      inputs.image_name != '' && inputs.deploy_preprod == true &&
+      github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' &&
+      needs.build.result == 'success' &&
+      (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
+      (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
+      (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Notice — image published; no service-repo bot commit
+        run: |
+          TAG="${{ needs.build.outputs.image_tag || github.run_id }}"
+          echo "::notice::Image published to GHCR tag=${TAG}. No ci-image.yaml commit (avoids CI loops)."
+          echo "::notice::Contabo dev/preprod Approve: sibling jobs after Build. Auto sync preprod has no gitops commit."
+
+  # ============================================================
+  # CONTABO APPROVE — preprod (below Feature; pin this build's tag)
+  # ============================================================
+  contabo-preprod:
+    name: Contabo Argo → preprod (approve)
+    needs: [build, vulnerability-scan, misconfig-scan, security-scan]
+    if: |
+      always() &&
+      inputs.contabo_approve == true &&
+      inputs.image_name != '' &&
+      (github.event_name == 'push' || github.event_name == 'pull_request') &&
+      needs.build.result == 'success' &&
+      (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
+      (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
+      (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped') &&
+      (
+        (github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')) ||
+        (github.head_ref || github.ref_name) == 'develop' ||
+        startsWith(github.head_ref || github.ref_name, 'feature/') ||
+        startsWith(github.head_ref || github.ref_name, 'feat/') ||
+        startsWith(github.head_ref || github.ref_name, 'fix/') ||
+        startsWith(github.head_ref || github.ref_name, 'hotfix/')
+      )
+    runs-on: ubuntu-latest
+    environment: preprod
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout am-pipelines scripts
+        uses: actions/checkout@v4
+        with:
+          repository: AM-Portfolio/am-pipelines
+          path: am-pipelines-repo
+          ref: main
+          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image tag
+        id: tag
+        env:
+          TAG_FROM_BUILD: ${{ needs.build.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          TAG="${TAG_FROM_BUILD:-}"
+          if [[ -z "$TAG" ]]; then
+            echo "::error::No image tag from build"
+            exit 1
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Contabo pin + wait (preprod)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
@@ -695,29 +794,110 @@ jobs:
           chmod +x am-pipelines-repo/scripts/ci/argo-pin-and-wait.sh
           am-pipelines-repo/scripts/ci/argo-pin-and-wait.sh
 
-      - name: Contabo pin + wait (dev)
-        if: matrix.env == 'dev'
+  # ============================================================
+  # CONTABO APPROVE — prod / dr (main push only)
+  # ============================================================
+  contabo-prod:
+    name: Contabo Argo → prod (approve)
+    needs: [build, vulnerability-scan, misconfig-scan, security-scan]
+    if: |
+      always() &&
+      inputs.contabo_approve == true &&
+      inputs.image_name != '' &&
+      (github.event_name == 'push' || github.event_name == 'pull_request') &&
+      needs.build.result == 'success' &&
+      (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
+      (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
+      (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped') &&
+      github.event_name == 'push' &&
+      (github.ref_name == 'main' || github.ref_name == 'master')
+    runs-on: ubuntu-latest
+    environment: prod
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout am-pipelines scripts
+        uses: actions/checkout@v4
+        with:
+          repository: AM-Portfolio/am-pipelines
+          path: am-pipelines-repo
+          ref: main
+          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image tag
+        id: tag
+        env:
+          TAG_FROM_BUILD: ${{ needs.build.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          TAG="${TAG_FROM_BUILD:-}"
+          if [[ -z "$TAG" ]]; then
+            echo "::error::No image tag from build"
+            exit 1
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Contabo promote + wait (prod)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
           INPUT_SERVICE_NAME: ${{ inputs.image_name }}
-          INPUT_ENVIRONMENT: ${{ matrix.env }}
+          INPUT_ENVIRONMENT: prod
           INPUT_IMAGE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
           chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh
-          chmod +x am-pipelines-repo/scripts/ci/argo-pin-and-wait.sh
-          am-pipelines-repo/scripts/ci/argo-pin-and-wait.sh
+          chmod +x am-pipelines-repo/scripts/ci/argo-promote-and-wait.sh
+          am-pipelines-repo/scripts/ci/argo-promote-and-wait.sh
 
-      - name: Contabo promote + wait (prod/dr)
-        if: matrix.env == 'prod' || matrix.env == 'dr'
+  contabo-dr:
+    name: Contabo Argo → dr (approve)
+    needs: [build, vulnerability-scan, misconfig-scan, security-scan]
+    if: |
+      always() &&
+      inputs.contabo_approve == true &&
+      inputs.image_name != '' &&
+      (github.event_name == 'push' || github.event_name == 'pull_request') &&
+      needs.build.result == 'success' &&
+      (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
+      (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
+      (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped') &&
+      github.event_name == 'push' &&
+      (github.ref_name == 'main' || github.ref_name == 'master')
+    runs-on: ubuntu-latest
+    environment: dr
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout am-pipelines scripts
+        uses: actions/checkout@v4
+        with:
+          repository: AM-Portfolio/am-pipelines
+          path: am-pipelines-repo
+          ref: main
+          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image tag
+        id: tag
+        env:
+          TAG_FROM_BUILD: ${{ needs.build.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          TAG="${TAG_FROM_BUILD:-}"
+          if [[ -z "$TAG" ]]; then
+            echo "::error::No image tag from build"
+            exit 1
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Contabo promote + wait (dr)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
           INPUT_SERVICE_NAME: ${{ inputs.image_name }}
-          INPUT_ENVIRONMENT: ${{ matrix.env }}
+          INPUT_ENVIRONMENT: dr
           INPUT_IMAGE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail

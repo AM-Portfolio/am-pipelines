@@ -429,10 +429,9 @@ jobs:
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
-      - name: Contabo pin + wait (dev / preprod)
+      - name: Contabo roll image + wait (dev / preprod, no gitops commit)
         if: matrix.env == 'dev' || matrix.env == 'preprod'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
           INPUT_SERVICE_NAME: ${{ inputs.image_name }}
@@ -441,8 +440,8 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh
-          chmod +x am-pipelines-repo/scripts/ci/argo-pin-and-wait.sh
-          am-pipelines-repo/scripts/ci/argo-pin-and-wait.sh
+          chmod +x am-pipelines-repo/scripts/ci/argo-roll-image-and-wait.sh
+          am-pipelines-repo/scripts/ci/argo-roll-image-and-wait.sh
 
       - name: Contabo promote + wait (prod / dr)
         if: matrix.env == 'prod' || matrix.env == 'dr'

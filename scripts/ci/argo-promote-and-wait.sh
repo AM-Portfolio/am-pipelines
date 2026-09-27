@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Prod/DR Manual Deploy: open promote PR, wait until env pin matches TAG (human merge),
-# then Contabo Argo sync+wait Healthy/Synced (fail otherwise).
+# Prod/DR Contabo deploy after service Environment Approve:
+# direct-promote pin to am-gitops main (no CODEOWNERS PR), then Contabo sync+wait.
 #
 # Env:
 #   INPUT_SERVICE_NAME, INPUT_ENVIRONMENT (prod|dr), INPUT_IMAGE_TAG
 #   ARGOCD_AUTH_TOKEN, GH_TOKEN
-# Optional: WAIT_PROMOTE_SECONDS (default 900), WAIT_HEALTH_SECONDS
+# Optional: WAIT_PROMOTE_SECONDS (default 300), WAIT_HEALTH_SECONDS
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,7 +15,7 @@ source "${SCRIPT_DIR}/argo-api-lib.sh"
 SVC="${INPUT_SERVICE_NAME:?}"
 ENV="${INPUT_ENVIRONMENT:?}"
 TAG="${INPUT_IMAGE_TAG:?}"
-WAIT_PROMOTE="${WAIT_PROMOTE_SECONDS:-900}"
+WAIT_PROMOTE="${WAIT_PROMOTE_SECONDS:-300}"
 APP="${SVC}-${ENV}"
 
 case "$ENV" in
@@ -47,17 +47,52 @@ if [[ -n "$CURRENT" && "$CURRENT" == "$TAG" ]]; then
   exit 0
 fi
 
-echo "Opening promote for ${SVC} → ${ENV} (want tag=${TAG}, current=${CURRENT:-none})"
 if [[ "$ENV" == "prod" ]]; then
-  gh workflow run promote-to-prod.yml -R AM-Portfolio/am-gitops -f service="$SVC"
+  WF="promote-to-prod.yml"
 else
-  gh workflow run promote-to-dr.yml -R AM-Portfolio/am-gitops -f service="$SVC"
+  WF="promote-to-dr.yml"
 fi
 
-echo "::notice::Promote PR opened — human CODEOWNERS merge required within ${WAIT_PROMOTE}s"
-echo "Waiting for ${ENV}/image-tags/${SVC}.yaml tag=${TAG}..."
+echo "Dispatch ${WF}: service=${SVC} commit_mode=direct expected_tag=${TAG}"
+BEFORE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+gh workflow run "$WF" -R AM-Portfolio/am-gitops \
+  -f service="$SVC" \
+  -f commit_mode=direct \
+  -f expected_tag="$TAG"
+
+echo "Waiting for ${WF} run to finish (up to ${WAIT_PROMOTE}s)..."
 deadline=$((SECONDS + WAIT_PROMOTE))
+PROMOTE_OK=""
 while (( SECONDS < deadline )); do
+  while IFS=$'\t' read -r id status conclusion created; do
+    [[ -z "$id" ]] && continue
+    if [[ "$created" < "$BEFORE" ]]; then
+      continue
+    fi
+    if [[ "$status" == "completed" ]]; then
+      if [[ "$conclusion" != "success" ]]; then
+        echo "::error::${WF} run ${id} conclusion=${conclusion}"
+        gh run view "$id" -R AM-Portfolio/am-gitops --log-failed | tail -n 40 || true
+        exit 1
+      fi
+      echo "OK: ${WF} run ${id} succeeded"
+      PROMOTE_OK=1
+      break 2
+    fi
+  done < <(gh run list -R AM-Portfolio/am-gitops --workflow="$WF" --limit 8 \
+    --json databaseId,status,conclusion,createdAt \
+    --jq '.[] | [.databaseId, .status, (.conclusion // ""), .createdAt] | @tsv')
+  sleep 5
+done
+
+if [[ -z "$PROMOTE_OK" ]]; then
+  echo "::error::Timed out waiting for ${WF} (${WAIT_PROMOTE}s)"
+  exit 1
+fi
+
+echo "Waiting for ${ENV}/image-tags/${SVC}.yaml tag=${TAG}..."
+pin_deadline=$((SECONDS + 120))
+while (( SECONDS < pin_deadline )); do
   NOW="$(pin_tag "$ENV")"
   if [[ -n "$NOW" && "$NOW" == "$TAG" ]]; then
     echo "OK: pin landed ${ENV}=${TAG}"
@@ -66,9 +101,8 @@ while (( SECONDS < deadline )); do
     exit 0
   fi
   echo "pin still ${NOW:-none}; waiting..."
-  sleep 20
+  sleep 5
 done
 
-echo "::error::Promote not merged (or pin not ${TAG}) within ${WAIT_PROMOTE}s — deploy failed"
-echo "::error::Merge the promote PR, then re-run Manual Deploy for ${ENV}"
+echo "::error::Promote workflow succeeded but pin not ${TAG} on main within 120s"
 exit 1

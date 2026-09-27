@@ -41,9 +41,33 @@ argo_refresh_hard() {
 
 argo_sync() {
   local app="$1"
-  # Contabo requires ApplicationSyncRequest.name (400 without it)
-  argo_api POST "/api/v1/applications/${app}/sync" "{\"name\":\"${app}\",\"prune\":false}" >/dev/null
-  echo "OK: sync ${app}"
+  # Contabo requires ApplicationSyncRequest.name (400 without it).
+  # Retry when Argo returns code 9 / "another operation is already in progress"
+  # (common after Application PUT + hard refresh while auto-sync is running).
+  local attempt=1 max=15 err
+  local errf
+  errf="$(mktemp)"
+  while (( attempt <= max )); do
+    if argo_api POST "/api/v1/applications/${app}/sync" "{\"name\":\"${app}\",\"prune\":false}" >/dev/null 2>"$errf"; then
+      rm -f "$errf"
+      echo "OK: sync ${app}"
+      return 0
+    fi
+    err="$(cat "$errf" 2>/dev/null || true)"
+    if echo "$err" | grep -qiE 'already in progress|"code":9'; then
+      echo "::warning::sync ${app}: another operation in progress — retry ${attempt}/${max}"
+      sleep $(( 2 + attempt ))
+      attempt=$((attempt + 1))
+      continue
+    fi
+    cat "$errf" >&2 || true
+    rm -f "$errf"
+    return 1
+  done
+  cat "$errf" >&2 || true
+  rm -f "$errf"
+  echo "::error::sync ${app} still blocked (another operation in progress) after ${max} retries"
+  return 1
 }
 
 # Refresh+sync then poll until Healthy. Optional EXPECT_TAG substring in live images.
@@ -57,7 +81,9 @@ argo_sync_and_wait_healthy() {
   local last_health="" last_sync="" last_images=""
   local outofsync_retried=0
 
-  argo_refresh_hard "$app"
+  argo_refresh_hard "$app" || true
+  # Give auto-sync / refresh a moment before requesting an explicit sync
+  sleep 5
   argo_sync "$app"
 
   echo "Waiting for ${app} Healthy (up to ${wait_health}s)..."

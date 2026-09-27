@@ -61,8 +61,8 @@ on:
         type: boolean
         default: true
         description: >-
-          Feature-branch: push ci-image.yaml only (no Argo — Contabo is prod/DR only).
-          Deploy nonprod locally with am deploy. On main/master: no-op when gitops_write_preprod.
+          Feature-branch: build+publish GHCR only (no bot commit of ci-image.yaml — that caused CI loops).
+          On main/master: no-op when gitops_write_preprod.
       force_preprod_helm:
         required: false
         type: boolean
@@ -110,12 +110,11 @@ on:
       gitops_write_preprod:
         required: false
         type: boolean
-        # Default on: every main/master build bumps am-gitops pins (SoT / promote input).
-        # No Argo sync for preprod — Contabo Argo is prod+DR only. Deploy nonprod via local am deploy.
+        # Default on: main/master bumps am-gitops pins when digest changes (SoT + Argo sync).
         default: true
         description: >-
           Auto-commit image tag/digest to AM-Portfolio/am-gitops preprod/image-tags + releases/preprod
-          (pin SoT only; no Argo). Default true on main/master. Needs GITHUB_PAT contents:write on am-gitops.
+          when digest changes. Default true on main/master. Needs GITHUB_PAT contents:write on am-gitops.
       gitops_values_repo:
         required: false
         type: string
@@ -130,7 +129,7 @@ on:
       ARGOCD_AUTH_TOKEN:
         required: false
         description: >-
-          Contabo Argo CD API token (prod/DR sync via am-gitops argo-sync-on-tags). Not used for preprod/dev.
+          Contabo Argo CD API token (am-gitops argo-sync-on-tags for all envs after pin pushes).
       ARGOCD_SERVER:
         required: false
         description: "Contabo Argo CD base URL (default https://argocd.asrax.in)"
@@ -471,7 +470,16 @@ jobs:
           set -euo pipefail
           git config user.name "am-gitops-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "releases/preprod/${SVC}.yaml" "preprod/image-tags/${SVC}.yaml"
+          PIN="preprod/image-tags/${SVC}.yaml"
+          # Idempotent: skip commit when digest already matches (avoid tag-only churn)
+          if [[ -n "${DIGEST}" && -f "$PIN" ]]; then
+            OLD="$(grep -E '^\s*digest:' "$PIN" | head -1 | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+            if [[ -n "$OLD" && "$OLD" == "$DIGEST" ]]; then
+              echo "No digest change (${DIGEST}) — skip gitops commit"
+              exit 0
+            fi
+          fi
+          git add "releases/preprod/${SVC}.yaml" "$PIN"
           if git diff --cached --quiet; then
             echo "No gitops changes"
             exit 0
@@ -514,11 +522,11 @@ jobs:
           exit-code: "0" # Non-blocking (reports but continues)
 
   # ============================================================
-  # PREPROD FEATURE BRANCH — ci-image only (no Argo; Contabo = prod/DR)
-  # Deploy with local: am deploy --env preprod --ref <branch>
+  # FEATURE BRANCH — GHCR publish only (no ci-image bot commits)
+  # Writing helm/ci-image.yaml onto the feature branch retriggered CI loops.
   # ============================================================
   preprod-feature-argo:
-    name: Preprod feature → ci-image (no Argo)
+    name: Feature → GHCR only (no bot commit)
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
     runs-on: ubuntu-latest
     if: |
@@ -530,37 +538,14 @@ jobs:
       (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
       (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
     permissions:
-      contents: write
-      packages: write
+      contents: read
+      packages: read
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
-
-      - name: Checkout am-pipelines scripts
-        uses: actions/checkout@v4
-        with:
-          repository: AM-Portfolio/am-pipelines
-          path: am-pipelines-repo
-          ref: main
-          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
-
-      - name: Push ci-image.yaml on feature branch
-        shell: bash
-        env:
-          INPUT_WORKING_DIRECTORY: ${{ inputs.working_directory }}
-          INPUT_GIT_REF: ${{ github.head_ref || github.ref_name }}
-          IMAGE_TAG: ${{ needs.build.outputs.image_tag || github.run_id }}
+      - name: Notice — image published; no service-repo bot commit
         run: |
-          chmod +x am-pipelines-repo/scripts/ci/write-and-push-ci-image.sh
-          am-pipelines-repo/scripts/ci/write-and-push-ci-image.sh
-
-      - name: Notice — no Argo for preprod
-        run: |
-          echo "::notice::ci-image pushed. Contabo Argo is prod+DR only."
-          echo "::notice::Deploy nonprod locally: am deploy --env preprod --ref ${{ github.head_ref || github.ref_name }}"
+          TAG="${{ needs.build.outputs.image_tag || github.run_id }}"
+          echo "::notice::Image published to GHCR tag=${TAG}. No ci-image.yaml commit (avoids CI loops)."
+          echo "::notice::Preprod roll: merge to main (gitops pin) or am gitops set-tag / Contabo sync."
 
   # ============================================================
   # PREPROD Helm BREAK-GLASS only (force_preprod_helm)

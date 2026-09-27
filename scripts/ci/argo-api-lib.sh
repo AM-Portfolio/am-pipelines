@@ -83,8 +83,15 @@ argo_sync_and_wait_healthy() {
     fi
 
     if [[ "$health" == "Healthy" ]]; then
-      if [[ -n "$expect_tag" && -n "$images" && "$images" != *"$expect_tag"* ]]; then
-        echo "::warning::App Healthy but live images do not yet contain tag=${expect_tag} (${images})"
+      if [[ -n "$expect_tag" && "$images" != *"$expect_tag"* ]]; then
+        if [[ "${STRICT_IMAGE_TAG:-0}" == "1" ]]; then
+          echo "::warning::App Healthy but live images missing tag=${expect_tag} (${images}) — keep waiting (STRICT_IMAGE_TAG=1)"
+          sleep 10
+          continue
+        fi
+        if [[ -n "$images" ]]; then
+          echo "::warning::App Healthy but live images do not yet contain tag=${expect_tag} (${images})"
+        fi
       fi
       if [[ "$sync" == "Synced" ]]; then
         echo "::notice::OK ${app} Healthy/Synced"
@@ -107,6 +114,10 @@ argo_sync_and_wait_healthy() {
     # Progressing / Degraded / Unknown: keep polling until timeout
     sleep 10
   done
-  echo "::error::${app} wait-healthy timeout after ${wait_health}s — last health=${last_health} sync=${last_sync} images=${last_images}"
+  if [[ "${STRICT_IMAGE_TAG:-0}" == "1" && -n "$expect_tag" && "$last_images" != *"$expect_tag"* ]]; then
+    echo "::error::${app} wait-healthy timeout after ${wait_health}s — live images never showed tag=${expect_tag} (health=${last_health} sync=${last_sync} images=${last_images})"
+  else
+    echo "::error::${app} wait-healthy timeout after ${wait_health}s — last health=${last_health} sync=${last_sync} images=${last_images}"
+  fi
   return 1
 }

@@ -445,7 +445,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${ARGOCD_AUTH_TOKEN:-}" || -z "${ARGOCD_SERVER:-}" ]]; then
-            echo "::error::GitHub Environment '${{ matrix.env }}' missing ARGOCD_AUTH_TOKEN / ARGOCD_SERVER (Contabo Argo). Set both on Environments dig and preprod."
+            echo "::error::GitHub Environment '${{ matrix.env }}' missing ARGOCD_AUTH_TOKEN / ARGOCD_SERVER (Contabo Argo). Set both on Environments dev and preprod."
             exit 1
           fi
           chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh

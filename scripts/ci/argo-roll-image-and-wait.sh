@@ -46,7 +46,7 @@ fi
 # Cluster connection SoT: am-vps-nonprod Unknown/Failed => nonprod-dr active
 CLUSTERS_JSON="$(argo_api GET "/api/v1/clusters" 2>/dev/null || echo '{}')"
 VPS_CONN="$(
-  echo "$CLUSTERS_JSON" | python3 - <<'PY'
+  echo "$CLUSTERS_JSON" | python3 -c "$(cat <<'PY'
 import json, sys
 try:
     d = json.load(sys.stdin)
@@ -66,11 +66,13 @@ for c in items:
 print("")
 PY
 )"
+)"
 echo "nonprod cluster probe: am-vps-nonprod connection=${VPS_CONN:-unknown}"
 
 # --- nonprod-dr failover: ensure destination is laptop Kind when VPS is down ---
+# python3 -c "$(cat <<'PY'...)" keeps stdin free for the Application JSON pipe.
 DEST_PATCHED="$(
-  echo "$RAW" | ENV="$ENV" NONPROD_ORIGIN="${NONPROD_ORIGIN:-}" VPS_CONN="${VPS_CONN:-}" python3 - <<'PY'
+  echo "$RAW" | ENV="$ENV" NONPROD_ORIGIN="${NONPROD_ORIGIN:-}" VPS_CONN="${VPS_CONN:-}" python3 -c "$(cat <<'PY'
 import json, os, sys
 
 app = json.load(sys.stdin)
@@ -157,6 +159,7 @@ else:
 json.dump({"app": app, "changed": changed}, sys.stdout)
 PY
 )"
+)"
 CHANGED="$(echo "$DEST_PATCHED" | python3 -c 'import json,sys; print("1" if json.load(sys.stdin).get("changed") else "0")')"
 RAW="$(echo "$DEST_PATCHED" | python3 -c 'import json,sys; json.dump(json.load(sys.stdin)["app"], sys.stdout)')"
 if [[ "$CHANGED" == "1" ]]; then
@@ -166,7 +169,7 @@ fi
 # Build Application PUT body + Sync body (sources with helm.parameters) so AppSet wipe
 # between PUT and sync cannot drop the tag for this sync operation.
 BUILT="$(
-  echo "$RAW" | TAG="$TAG" python3 - <<'PY'
+  echo "$RAW" | TAG="$TAG" python3 -c "$(cat <<'PY'
 import json, os, sys
 
 app = json.load(sys.stdin)
@@ -208,6 +211,7 @@ sync_body = {
 json.dump({"app": app, "sync": sync_body}, sys.stdout)
 PY
 )"
+)"
 
 PATCHED="$(echo "$BUILT" | python3 -c 'import json,sys; json.dump(json.load(sys.stdin)["app"], sys.stdout)')"
 SYNC_BODY="$(echo "$BUILT" | python3 -c 'import json,sys; json.dump(json.load(sys.stdin)["sync"], sys.stdout)')"
@@ -219,10 +223,9 @@ echo "OK: set helm parameters global.image.tag=${TAG} on ${APP} (no git commit)"
 sleep 2
 CHECK="$(argo_api GET "/api/v1/applications/${APP}" || true)"
 PARAM_NOW="$(
-  echo "$CHECK" | TAG="$TAG" python3 - <<'PY'
+  echo "$CHECK" | TAG="$TAG" python3 -c "$(cat <<'PY'
 import json, sys, os
 app = json.load(sys.stdin)
-want = os.environ["TAG"]
 got = ""
 for s in (app.get("spec") or {}).get("sources") or []:
     for p in ((s.get("helm") or {}).get("parameters") or []):
@@ -230,6 +233,7 @@ for s in (app.get("spec") or {}).get("sources") or []:
             got = p.get("value") or ""
 print(got)
 PY
+)" 2>/dev/null || true
 )"
 if [[ "$PARAM_NOW" != "$TAG" ]]; then
   echo "::warning::helm.parameters wiped after PUT (got=${PARAM_NOW:-empty}) — sync will still pass sources override with tag=${TAG}"
@@ -261,7 +265,7 @@ while (( attempt <= max )); do
     export NONPROD_ORIGIN=local
     export FAILOVER_RETRIED=1
     PATCHED="$(
-      echo "$PATCHED" | python3 - <<'PY'
+      echo "$PATCHED" | python3 -c "$(cat <<'PY'
 import json, sys
 app = json.load(sys.stdin)
 app.setdefault("spec", {})["destination"] = {
@@ -270,6 +274,7 @@ app.setdefault("spec", {})["destination"] = {
 }
 json.dump(app, sys.stdout)
 PY
+)"
     )"
     argo_api PUT "/api/v1/applications/${APP}" "$PATCHED" >/dev/null || true
     sleep 3

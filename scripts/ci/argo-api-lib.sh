@@ -18,19 +18,34 @@ argo_api() {
   local method="$1" path="$2" body="${3:-}"
   argo_require_token
   local url="${ARGOCD_SERVER}${path}"
-  local args=(-sS -w "\n%{http_code}" -X "$method" -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" -H "Content-Type: application/json" -H "User-Agent: am-pipelines-ci")
-  if [[ -n "$body" ]]; then
-    args+=(-d "$body")
-  fi
-  local resp http
-  resp="$(curl "${args[@]}" "$url")" || true
-  http="$(printf '%s' "$resp" | tail -n1)"
-  resp="$(printf '%s' "$resp" | sed '$d')"
-  if [[ "$http" != 2* ]]; then
+  # Contabo sits behind Cloudflare — 502/503/504/429 are retryable (origin overload).
+  local attempt=1 max="${ARGO_API_RETRIES:-8}"
+  local resp http sleep_s
+  while (( attempt <= max )); do
+    local args=(-sS -w "\n%{http_code}" -X "$method" -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" -H "Content-Type: application/json" -H "User-Agent: am-pipelines-ci")
+    if [[ -n "$body" ]]; then
+      args+=(-d "$body")
+    fi
+    resp="$(curl "${args[@]}" "$url")" || true
+    http="$(printf '%s' "$resp" | tail -n1)"
+    resp="$(printf '%s' "$resp" | sed '$d')"
+    if [[ "$http" == 2* ]]; then
+      printf '%s' "$resp"
+      return 0
+    fi
+    if [[ "$http" == "502" || "$http" == "503" || "$http" == "504" || "$http" == "429" ]]; then
+      # Cloudflare retry_after often ~60s on 502; backoff grows but caps at 60
+      sleep_s=$(( attempt < 4 ? attempt * 5 : 60 ))
+      echo "::warning::Argo API ${method} ${path} HTTP ${http} (transient) — retry ${attempt}/${max} in ${sleep_s}s" >&2
+      sleep "$sleep_s"
+      attempt=$((attempt + 1))
+      continue
+    fi
     echo "::error::Argo API ${method} ${path} HTTP ${http}: ${resp}" >&2
     return 1
-  fi
-  printf '%s' "$resp"
+  done
+  echo "::error::Argo API ${method} ${path} still failing after ${max} retries (last HTTP ${http}): ${resp}" >&2
+  return 1
 }
 
 argo_refresh_hard() {

@@ -261,6 +261,21 @@ jobs:
           # blocks login (|| does not fall through). Cross-repo pulls need package Actions access.
           password: ${{ github.token }}
 
+      # Existing org packages often lack "Actions access" for this repo → push write_package.
+      - name: Ensure GHCR package linked to this repository
+        if: ${{ inputs.image_name != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PKG=$(echo "${{ inputs.image_name }}" | tr '[:upper:]' '[:lower:]')
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          REPO_ID=$(gh api "repos/${{ github.repository }}" --jq .id)
+          echo "Linking package container/$PKG -> repo id $REPO_ID"
+          gh api --method PUT \
+            "orgs/${{ github.repository_owner }}/packages/container/${PKG}/repositories/${REPO_ID}" \
+            || echo "::warning::Package link skipped (missing package yet, or token lacks package admin)"
+
       - name: Build and Push Docker Image
         id: push
         if: ${{ inputs.image_name != '' }}

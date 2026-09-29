@@ -20,7 +20,9 @@ on:
         required: false
         type: string
         default: ""
-        description: "Optional repo-scoped GHCR path under owner (e.g. am-gateways/am-api-gateway). Defaults to image_name."
+        description: >-
+          Optional GHCR path under owner. Empty = <git-repo>/<image_name>
+          (repo-scoped so github.token can write_package).
       registry:
         required: false
         type: string
@@ -267,18 +269,28 @@ jobs:
           password: ${{ github.token }}
 
       # Existing org packages often lack "Actions access" for this repo → push write_package.
-      # Prefer repo-scoped path (ghcr_image_name) so github.token can create/write the package.
+      # Default push path is repo-scoped: <git-repo>/<image_name> (github.token can write).
       - name: Ensure GHCR package linked to this repository
         if: ${{ inputs.image_name != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
-          GHCR_IMAGE_NAME: ${{ inputs.ghcr_image_name != '' && inputs.ghcr_image_name || inputs.image_name }}
+          IMAGE_NAME: ${{ inputs.image_name }}
+          GHCR_IMAGE_NAME_INPUT: ${{ inputs.ghcr_image_name }}
         run: |
           set -euo pipefail
-          PKG=$(echo "${GHCR_IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')
-          PKG_ENC=$(python3 -c 'import urllib.parse,os; print(urllib.parse.quote(os.environ["GHCR_IMAGE_NAME"].lower(), safe=""))')
+          REPO_NAME="${GITHUB_REPOSITORY##*/}"
+          if [ -n "${GHCR_IMAGE_NAME_INPUT}" ]; then
+            GHCR_IMAGE_NAME="${GHCR_IMAGE_NAME_INPUT}"
+          elif [[ "${IMAGE_NAME}" == */* ]]; then
+            GHCR_IMAGE_NAME="${IMAGE_NAME}"
+          else
+            GHCR_IMAGE_NAME="${REPO_NAME}/${IMAGE_NAME}"
+          fi
+          GHCR_IMAGE_NAME=$(echo "${GHCR_IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')
+          export GHCR_IMAGE_NAME
+          PKG_ENC=$(python3 -c 'import urllib.parse,os; print(urllib.parse.quote(os.environ["GHCR_IMAGE_NAME"], safe=""))')
           REPO_ID=$(gh api "repos/${{ github.repository }}" --jq .id)
-          echo "Linking package container/$PKG -> repo id $REPO_ID"
+          echo "Linking package container/${GHCR_IMAGE_NAME} -> repo id $REPO_ID"
           gh api --method PUT \
             "orgs/${{ github.repository_owner }}/packages/container/${PKG_ENC}/repositories/${REPO_ID}" \
             || echo "::warning::Package link skipped (missing package yet, or token lacks package admin)"
@@ -288,8 +300,18 @@ jobs:
         if: ${{ inputs.image_name != '' }}
         env:
           GHCR_TOKEN: ${{ github.token }}
-          GHCR_IMAGE_NAME: ${{ inputs.ghcr_image_name != '' && inputs.ghcr_image_name || inputs.image_name }}
+          IMAGE_NAME: ${{ inputs.image_name }}
+          GHCR_IMAGE_NAME_INPUT: ${{ inputs.ghcr_image_name }}
         run: |
+          set -euo pipefail
+          REPO_NAME="${GITHUB_REPOSITORY##*/}"
+          if [ -n "${GHCR_IMAGE_NAME_INPUT}" ]; then
+            GHCR_IMAGE_NAME="${GHCR_IMAGE_NAME_INPUT}"
+          elif [[ "${IMAGE_NAME}" == */* ]]; then
+            GHCR_IMAGE_NAME="${IMAGE_NAME}"
+          else
+            GHCR_IMAGE_NAME="${REPO_NAME}/${IMAGE_NAME}"
+          fi
           IMAGE_ID=${{ inputs.registry }}/${{ github.repository_owner }}/${GHCR_IMAGE_NAME}
           IMAGE_ID=$(echo $IMAGE_ID | tr '[A-Z]' '[a-z]')
           BASE_REG="ghcr.io/${{ github.repository_owner }}/"
@@ -336,8 +358,18 @@ jobs:
       - name: Lowercase Image Ref
         id: image
         env:
-          GHCR_IMAGE_NAME: ${{ inputs.ghcr_image_name != '' && inputs.ghcr_image_name || inputs.image_name }}
+          IMAGE_NAME: ${{ inputs.image_name }}
+          GHCR_IMAGE_NAME_INPUT: ${{ inputs.ghcr_image_name }}
         run: |
+          set -euo pipefail
+          REPO_NAME="${GITHUB_REPOSITORY##*/}"
+          if [ -n "${GHCR_IMAGE_NAME_INPUT}" ]; then
+            GHCR_IMAGE_NAME="${GHCR_IMAGE_NAME_INPUT}"
+          elif [[ "${IMAGE_NAME}" == */* ]]; then
+            GHCR_IMAGE_NAME="${IMAGE_NAME}"
+          else
+            GHCR_IMAGE_NAME="${REPO_NAME}/${IMAGE_NAME}"
+          fi
           ref="ghcr.io/${{ github.repository_owner }}/${GHCR_IMAGE_NAME}:${{ github.run_id }}"
           echo "ref=$(echo $ref | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
 

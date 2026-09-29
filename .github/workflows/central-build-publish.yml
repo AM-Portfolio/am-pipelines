@@ -40,7 +40,7 @@ on:
         type: string
         default: "am-apps-prod"
         description: "Kubernetes namespace for prod"
-      # Deprecated no-ops (kept for caller API compat). Contabo Argo only — no Helm from GHA.
+      # Deprecated no-ops (kept for caller API compat). Contabo Argo only â€” no Helm from GHA.
       deploy_dev:
         required: false
         type: boolean
@@ -141,10 +141,10 @@ on:
         description: "Contabo Argo CD base URL (default https://argocd.asrax.in)"
       KUBECONFIG_NONPROD:
         required: false
-        description: "DEPRECATED — refused by CI. Do not store kubeconfig in GitHub. Use Argo API."
+        description: "DEPRECATED â€” refused by CI. Do not store kubeconfig in GitHub. Use Argo API."
       KUBECONFIG_PROD:
         required: false
-        description: "DEPRECATED — refused by CI. Prod = promote + Argo only."
+        description: "DEPRECATED â€” refused by CI. Prod = promote + Argo only."
     outputs:
       image_tag:
         description: "Published GHCR image tag (run id)"
@@ -158,7 +158,7 @@ on:
 
 jobs:
   # ============================================================
-  # SECURITY SCAN — GitHub-hosted runner
+  # SECURITY SCAN â€” GitHub-hosted runner
   # Scans for secrets (tokens, keys) using TruffleHog OSS
   # ============================================================
   security-scan:
@@ -181,7 +181,7 @@ jobs:
           extra_args: --only-verified
 
   # ============================================================
-  # MISCONFIG SCAN (IaC) — GitHub-hosted runner
+  # MISCONFIG SCAN (IaC) â€” GitHub-hosted runner
   # Scans Helm charts and Terraform for security misconfigurations
   # ============================================================
   misconfig-scan:
@@ -207,7 +207,7 @@ jobs:
           log_level: ERROR
 
   # ============================================================
-  # BUILD — GitHub-hosted runner
+  # BUILD â€” GitHub-hosted runner
   # Compiles, tests, builds and pushes Docker image to GHCR
   # ============================================================
   build:
@@ -233,7 +233,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ── Java ──────────────────────────────────────────────
+      # â”€â”€ Java â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       - name: Set up JDK
         if: ${{ inputs.language == 'java' }}
         uses: actions/setup-java@v4
@@ -277,7 +277,7 @@ jobs:
         if: ${{ inputs.language == 'java' }}
         working-directory: ${{ github.workspace }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           MODULE="${{ inputs.working_directory }}"
           ROOT_POM="${{ github.workspace }}/pom.xml"
@@ -292,7 +292,7 @@ jobs:
         if: ${{ inputs.language == 'java' }}
         working-directory: ${{ github.workspace }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           MODULE="${{ inputs.working_directory }}"
           ROOT_POM="${{ github.workspace }}/pom.xml"
@@ -302,7 +302,7 @@ jobs:
             mvn -B -f "${{ github.workspace }}/${MODULE}/pom.xml" test || echo "Test step failed or skipped"
           fi
 
-      # ── Python ────────────────────────────────────────────
+      # â”€â”€ Python â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       - name: Set up Python
         if: ${{ inputs.language == 'python' }}
         uses: actions/setup-python@v5
@@ -323,7 +323,7 @@ jobs:
           flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
           pytest || echo "Tests failed or not found - marking as skipped for now"
 
-      # ── Node.js / React ───────────────────────────────────
+      # â”€â”€ Node.js / React â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       - name: Set up Node.js
         if: ${{ inputs.language == 'node' || inputs.language == 'react' }}
         uses: actions/setup-node@v4
@@ -344,23 +344,22 @@ jobs:
         if: ${{ inputs.language == 'node' || inputs.language == 'react' }}
         run: npm test --if-present
 
-      # ── Docker ────────────────────────────────────────────
+      # â”€â”€ Docker â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       - name: Log in to GitHub Container Registry
         if: ${{ inputs.image_name != '' }}
         uses: docker/login-action@v3
         with:
           registry: ${{ inputs.registry }}
           username: ${{ github.actor }}
-          # GHCR_TOKEN is an org-level PAT with read:packages scope, passed via
-          # secrets: inherit. Enables cross-repo pulls (e.g. am-python-base from
-          # am-market). Falls back to GITHUB_TOKEN for same-repo package access.
-          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+          # Use job github.token (packages:write). Do not prefer org GHCR_TOKEN — a dead PAT
+          # blocks login (|| does not fall through). Cross-repo pulls need package Actions access.
+          password: ${{ github.token }}
 
       - name: Build and Push Docker Image
         id: push
         if: ${{ inputs.image_name != '' }}
         env:
-          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+          GHCR_TOKEN: ${{ github.token }}
         run: |
           IMAGE_ID=${{ inputs.registry }}/${{ github.repository_owner }}/${{ inputs.image_name }}
           IMAGE_ID=$(echo $IMAGE_ID | tr '[A-Z]' '[a-z]')
@@ -393,11 +392,11 @@ jobs:
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 
   # ============================================================
-  # GITOPS — auto-commit preprod image-tags (SoT). Contabo Argo follows.
+  # GITOPS â€” auto-commit preprod image-tags (SoT). Contabo Argo follows.
   # Requires org GITHUB_PAT (or GHCR_TOKEN) with contents:write on am-gitops.
   # ============================================================
   gitops-preprod:
-    name: GitOps → Preprod image-tags
+    name: GitOps â†’ Preprod image-tags
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
     runs-on: ubuntu-latest
     if: |
@@ -418,13 +417,13 @@ jobs:
         with:
           repository: AM-Portfolio/am-gitops
           ref: main
-          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_PAT || github.token }}
           path: am-gitops
 
       - name: Resolve chart SHA
         id: chart
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_PAT || github.token }}
         run: |
           SHA=$(gh api repos/AM-Portfolio/am-pipelines/commits/main --jq .sha)
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
@@ -447,7 +446,7 @@ jobs:
           VALUES_PATH="${VALUES_PATH_INPUT:-${WORKING_DIRECTORY}}"
           mkdir -p "am-gitops/releases/preprod" "am-gitops/preprod/image-tags"
           {
-            echo "# CI-written freeze — do not hand-edit for enrolled services"
+            echo "# CI-written freeze â€” do not hand-edit for enrolled services"
             echo "image:"
             echo "  repository: ${REPO}"
             echo "  digest: ${DIGEST}"
@@ -492,7 +491,7 @@ jobs:
           if [[ -n "${DIGEST}" ]]; then
             OLD="$(git show "HEAD:${PIN}" 2>/dev/null | grep -E '^\s*digest:' | head -1 | sed -E 's/.*"([^"]+)".*/\1/' || true)"
             if [[ -n "$OLD" && "$OLD" == "$DIGEST" ]]; then
-              echo "No digest change (${DIGEST}) — skip gitops commit"
+              echo "No digest change (${DIGEST}) â€” skip gitops commit"
               exit 0
             fi
           fi
@@ -505,11 +504,11 @@ jobs:
           git push origin HEAD:main
 
   # ============================================================
-  # CONTABO ARGO — sync+wait preprod after main pin (fail if not Healthy)
+  # CONTABO ARGO â€” sync+wait preprod after main pin (fail if not Healthy)
   # ============================================================
   # Skipped when caller sets contabo_wait_preprod: false (gateways run Contabo in parallel approve jobs).
   argo-preprod:
-    name: Contabo Argo → preprod (central)
+    name: Contabo Argo â†’ preprod (central)
     needs: [build, gitops-preprod]
     runs-on: ubuntu-latest
     if: |
@@ -530,7 +529,7 @@ jobs:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
           ref: main
-          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_PAT || github.token }}
 
       - name: Sync + wait Contabo Healthy/Synced
         env:
@@ -547,7 +546,7 @@ jobs:
           am-pipelines-repo/scripts/ci/argo-sync-and-wait.sh
 
   # ============================================================
-  # VULNERABILITY SCAN — GitHub-hosted runner
+  # VULNERABILITY SCAN â€” GitHub-hosted runner
   # Scans the built Docker image for CVEs
   # ============================================================
   vulnerability-scan:
@@ -573,7 +572,7 @@ jobs:
         uses: aquasecurity/trivy-action@master
         env:
           TRIVY_USERNAME: ${{ github.actor }}
-          TRIVY_PASSWORD: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+          TRIVY_PASSWORD: ${{ github.token }}
         with:
           image-ref: ${{ steps.image.outputs.ref }}
           format: "table"
@@ -581,11 +580,11 @@ jobs:
           exit-code: "0" # Non-blocking (reports but continues)
 
   # ============================================================
-  # AUTO SYNC PREPROD — Contabo refresh only (NO am-gitops commit)
+  # AUTO SYNC PREPROD â€” Contabo refresh only (NO am-gitops commit)
   # Top rail when contabo_approve: sync live app; pin happens on Approve.
   # ============================================================
   auto-sync-preprod:
-    name: Auto sync → preprod (no gitops commit)
+    name: Auto sync â†’ preprod (no gitops commit)
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
     if: |
       always() &&
@@ -614,7 +613,7 @@ jobs:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
           ref: main
-          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_PAT || github.token }}
 
       - name: Resolve image tag
         id: tag
@@ -638,16 +637,16 @@ jobs:
           INPUT_IMAGE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
-          echo "::notice::Auto sync Contabo preprod — no am-gitops commit. New tag deploys after Contabo Approve."
+          echo "::notice::Auto sync Contabo preprod â€” no am-gitops commit. New tag deploys after Contabo Approve."
           chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh
           chmod +x am-pipelines-repo/scripts/ci/argo-sync-and-wait.sh
           am-pipelines-repo/scripts/ci/argo-sync-and-wait.sh
 
   # ============================================================
-  # FEATURE BRANCH — GHCR publish only (no ci-image bot commits)
+  # FEATURE BRANCH â€” GHCR publish only (no ci-image bot commits)
   # ============================================================
   preprod-feature-argo:
-    name: Feature → GHCR only (no bot commit)
+    name: Feature â†’ GHCR only (no bot commit)
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
     runs-on: ubuntu-latest
     if: |
@@ -662,17 +661,17 @@ jobs:
       contents: read
       packages: read
     steps:
-      - name: Notice — image published; no service-repo bot commit
+      - name: Notice â€” image published; no service-repo bot commit
         run: |
           TAG="${{ needs.build.outputs.image_tag || github.run_id }}"
           echo "::notice::Image published to GHCR tag=${TAG}. No ci-image.yaml commit (avoids CI loops)."
           echo "::notice::Contabo dev/preprod/prod/dr Approve: one Matrix box after Build. Auto sync preprod has no gitops commit."
 
   # ============================================================
-  # CONTABO APPROVE — one Matrix box: dig + preprod (+ prod/dr on main)
+  # CONTABO APPROVE â€” one Matrix box: dig + preprod (+ prod/dr on main)
   # ============================================================
   contabo-approve:
-    name: Contabo Argo → ${{ matrix.env }} (approve)
+    name: Contabo Argo â†’ ${{ matrix.env }} (approve)
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
     if: |
       always() &&
@@ -706,7 +705,7 @@ jobs:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
           ref: main
-          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_PAT || github.token }}
 
       - name: Resolve image tag
         id: tag
@@ -724,7 +723,7 @@ jobs:
       - name: Contabo pin + wait (dev / preprod)
         if: matrix.env == 'dev' || matrix.env == 'preprod'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_PAT || github.token }}
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
           INPUT_SERVICE_NAME: ${{ inputs.image_name }}
@@ -739,7 +738,7 @@ jobs:
       - name: Contabo promote + wait (prod / dr)
         if: matrix.env == 'prod' || matrix.env == 'dr'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_PAT || github.token }}
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
           INPUT_SERVICE_NAME: ${{ inputs.image_name }}

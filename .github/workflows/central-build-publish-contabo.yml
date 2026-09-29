@@ -1,7 +1,7 @@
 name: Central Build & Publish (Contabo gateways)
 
 # Slim reusable for am-gateways: no Feature GHCR notice, no GitOps pin, no Contabo-central.
-# Graph: Secrets+IaC → Build → Vuln → Auto sync (main only) + Contabo Approve matrix.
+# Graph: Secrets+IaC â†’ Build â†’ Vuln â†’ Auto sync (main only) + Contabo Approve matrix.
 
 on:
   workflow_call:
@@ -85,7 +85,7 @@ jobs:
           extra_args: --only-verified
 
   # ============================================================
-  # MISCONFIG SCAN (IaC) — GitHub-hosted runner
+  # MISCONFIG SCAN (IaC) â€” GitHub-hosted runner
   # Scans Helm charts and Terraform for security misconfigurations
   # ============================================================
 
@@ -112,7 +112,7 @@ jobs:
           log_level: ERROR
 
   # ============================================================
-  # BUILD — GitHub-hosted runner
+  # BUILD â€” GitHub-hosted runner
   # Compiles, tests, builds and pushes Docker image to GHCR
   # ============================================================
 
@@ -139,7 +139,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ── Java ──────────────────────────────────────────────
+      # â”€â”€ Java â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       - name: Set up JDK
         if: ${{ inputs.language == 'java' }}
         uses: actions/setup-java@v4
@@ -183,7 +183,7 @@ jobs:
         if: ${{ inputs.language == 'java' }}
         working-directory: ${{ github.workspace }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           MODULE="${{ inputs.working_directory }}"
           ROOT_POM="${{ github.workspace }}/pom.xml"
@@ -198,7 +198,7 @@ jobs:
         if: ${{ inputs.language == 'java' }}
         working-directory: ${{ github.workspace }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           MODULE="${{ inputs.working_directory }}"
           ROOT_POM="${{ github.workspace }}/pom.xml"
@@ -208,7 +208,7 @@ jobs:
             mvn -B -f "${{ github.workspace }}/${MODULE}/pom.xml" test || echo "Test step failed or skipped"
           fi
 
-      # ── Python ────────────────────────────────────────────
+      # â”€â”€ Python â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       - name: Set up Python
         if: ${{ inputs.language == 'python' }}
         uses: actions/setup-python@v5
@@ -229,7 +229,7 @@ jobs:
           flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
           pytest || echo "Tests failed or not found - marking as skipped for now"
 
-      # ── Node.js / React ───────────────────────────────────
+      # â”€â”€ Node.js / React â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       - name: Set up Node.js
         if: ${{ inputs.language == 'node' || inputs.language == 'react' }}
         uses: actions/setup-node@v4
@@ -250,23 +250,22 @@ jobs:
         if: ${{ inputs.language == 'node' || inputs.language == 'react' }}
         run: npm test --if-present
 
-      # ── Docker ────────────────────────────────────────────
+      # â”€â”€ Docker â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       - name: Log in to GitHub Container Registry
         if: ${{ inputs.image_name != '' }}
         uses: docker/login-action@v3
         with:
           registry: ${{ inputs.registry }}
           username: ${{ github.actor }}
-          # GHCR_TOKEN is an org-level PAT with read:packages scope, passed via
-          # secrets: inherit. Enables cross-repo pulls (e.g. am-python-base from
-          # am-market). Falls back to GITHUB_TOKEN for same-repo package access.
-          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+          # Use job github.token (packages:write). Do not prefer org GHCR_TOKEN — a dead PAT
+          # blocks login (|| does not fall through). Cross-repo pulls need package Actions access.
+          password: ${{ github.token }}
 
       - name: Build and Push Docker Image
         id: push
         if: ${{ inputs.image_name != '' }}
         env:
-          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+          GHCR_TOKEN: ${{ github.token }}
         run: |
           IMAGE_ID=${{ inputs.registry }}/${{ github.repository_owner }}/${{ inputs.image_name }}
           IMAGE_ID=$(echo $IMAGE_ID | tr '[A-Z]' '[a-z]')
@@ -321,16 +320,16 @@ jobs:
         uses: aquasecurity/trivy-action@master
         env:
           TRIVY_USERNAME: ${{ github.actor }}
-          TRIVY_PASSWORD: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+          TRIVY_PASSWORD: ${{ github.token }}
         with:
           image-ref: ${{ steps.image.outputs.ref }}
           format: "table"
           severity: "CRITICAL,HIGH"
           exit-code: "0" # Non-blocking (reports but continues)
 
-  # Auto sync Contabo preprod — main push only; no am-gitops commit
+  # Auto sync Contabo preprod â€” main push only; no am-gitops commit
   auto-sync-preprod:
-    name: Auto sync → preprod (no gitops commit)
+    name: Auto sync â†’ preprod (no gitops commit)
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
     if: |
       always() &&
@@ -351,7 +350,7 @@ jobs:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
           ref: main
-          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_PAT || github.token }}
 
       - name: Resolve image tag
         id: tag
@@ -375,13 +374,13 @@ jobs:
           INPUT_IMAGE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
-          echo "::notice::Auto sync Contabo preprod — no am-gitops commit (main only)."
+          echo "::notice::Auto sync Contabo preprod â€” no am-gitops commit (main only)."
           chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh
           chmod +x am-pipelines-repo/scripts/ci/argo-sync-and-wait.sh
           am-pipelines-repo/scripts/ci/argo-sync-and-wait.sh
 
   contabo-approve:
-    name: Contabo Argo → ${{ matrix.env }} (approve)
+    name: Contabo Argo â†’ ${{ matrix.env }} (approve)
     # Wait for Auto sync on main so preprod Approve does not race the same Application.
     needs: [build, vulnerability-scan, misconfig-scan, security-scan, auto-sync-preprod]
     if: |
@@ -416,7 +415,7 @@ jobs:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
           ref: main
-          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_PAT || github.token }}
 
       - name: Resolve image tag
         id: tag
@@ -431,13 +430,13 @@ jobs:
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
-      - name: Argo roll image + wait (dev/preprod → Contabo)
+      - name: Argo roll image + wait (dev/preprod â†’ Contabo)
         if: matrix.env == 'dev' || matrix.env == 'preprod'
         env:
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
           # Optional: force nonprod-dr (local) or nonprod-main (vps). Empty = auto
-          # (dev always am-dev-apps; preprod retargets when am-vps-nonprod ≠ Successful).
+          # (dev always am-dev-apps; preprod retargets when am-vps-nonprod â‰  Successful).
           NONPROD_ORIGIN: ${{ vars.NONPROD_ORIGIN || '' }}
           INPUT_SERVICE_NAME: ${{ inputs.image_name }}
           INPUT_ENVIRONMENT: ${{ matrix.env }}
@@ -455,7 +454,7 @@ jobs:
       - name: Contabo promote + wait (prod / dr)
         if: matrix.env == 'prod' || matrix.env == 'dr'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_PAT || github.token }}
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
           INPUT_SERVICE_NAME: ${{ inputs.image_name }}

@@ -15,7 +15,12 @@ on:
       image_name:
         required: true
         type: string
-        description: "GHCR image / Contabo service name (e.g. am-api-gateway)"
+        description: "Contabo / Argo service name (e.g. am-api-gateway). Also default GHCR path."
+      ghcr_image_name:
+        required: false
+        type: string
+        default: ""
+        description: "Optional repo-scoped GHCR path under owner (e.g. am-gateways/am-api-gateway). Defaults to image_name."
       registry:
         required: false
         type: string
@@ -262,18 +267,20 @@ jobs:
           password: ${{ github.token }}
 
       # Existing org packages often lack "Actions access" for this repo → push write_package.
+      # Prefer repo-scoped path (ghcr_image_name) so github.token can create/write the package.
       - name: Ensure GHCR package linked to this repository
         if: ${{ inputs.image_name != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          GHCR_IMAGE_NAME: ${{ inputs.ghcr_image_name != '' && inputs.ghcr_image_name || inputs.image_name }}
         run: |
           set -euo pipefail
-          PKG=$(echo "${{ inputs.image_name }}" | tr '[:upper:]' '[:lower:]')
-          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          PKG=$(echo "${GHCR_IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')
+          PKG_ENC=$(python3 -c 'import urllib.parse,os; print(urllib.parse.quote(os.environ["GHCR_IMAGE_NAME"].lower(), safe=""))')
           REPO_ID=$(gh api "repos/${{ github.repository }}" --jq .id)
           echo "Linking package container/$PKG -> repo id $REPO_ID"
           gh api --method PUT \
-            "orgs/${{ github.repository_owner }}/packages/container/${PKG}/repositories/${REPO_ID}" \
+            "orgs/${{ github.repository_owner }}/packages/container/${PKG_ENC}/repositories/${REPO_ID}" \
             || echo "::warning::Package link skipped (missing package yet, or token lacks package admin)"
 
       - name: Build and Push Docker Image
@@ -281,8 +288,9 @@ jobs:
         if: ${{ inputs.image_name != '' }}
         env:
           GHCR_TOKEN: ${{ github.token }}
+          GHCR_IMAGE_NAME: ${{ inputs.ghcr_image_name != '' && inputs.ghcr_image_name || inputs.image_name }}
         run: |
-          IMAGE_ID=${{ inputs.registry }}/${{ github.repository_owner }}/${{ inputs.image_name }}
+          IMAGE_ID=${{ inputs.registry }}/${{ github.repository_owner }}/${GHCR_IMAGE_NAME}
           IMAGE_ID=$(echo $IMAGE_ID | tr '[A-Z]' '[a-z]')
           BASE_REG="ghcr.io/${{ github.repository_owner }}/"
           BASE_REG=$(echo $BASE_REG | tr '[A-Z]' '[a-z]')
@@ -327,8 +335,10 @@ jobs:
     steps:
       - name: Lowercase Image Ref
         id: image
+        env:
+          GHCR_IMAGE_NAME: ${{ inputs.ghcr_image_name != '' && inputs.ghcr_image_name || inputs.image_name }}
         run: |
-          ref="ghcr.io/${{ github.repository_owner }}/${{ inputs.image_name }}:${{ github.run_id }}"
+          ref="ghcr.io/${{ github.repository_owner }}/${GHCR_IMAGE_NAME}:${{ github.run_id }}"
           echo "ref=$(echo $ref | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
 
       - name: Run Trivy vulnerability scanner

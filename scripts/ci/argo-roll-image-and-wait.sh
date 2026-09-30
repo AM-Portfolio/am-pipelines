@@ -2,19 +2,17 @@
 # Roll dev/preprod image via Argo API helm parameters — NO gitops / service commits.
 # dev + preprod → Contabo Argo (ARGOCD_SERVER + ARGOCD_AUTH_TOKEN).
 #
-# When Contabo nonprod VPS is down (nonprod-dr active), dev and preprod rolls
-# target laptop Kind am-dev-apps (not am-vps-nonprod).
+# Dig always -> am-dev-apps. Preprod -> am-vps-nonprod when healthy; failover to
+# am-dev-apps only while VPS unreachable (or NONPROD_ORIGIN=local).
 #
 # Env:
 #   INPUT_SERVICE_NAME  e.g. am-api-gateway
-#   INPUT_ENVIRONMENT   dev|preprod
+#   INPUT_ENVIRONMENT   dig|preprod
 #   INPUT_IMAGE_TAG     GHCR tag (usually github.run_id)
 #   ARGOCD_AUTH_TOKEN
 # Optional:
 #   ARGOCD_SERVER, WAIT_HEALTH_SECONDS
-#   NONPROD_ORIGIN=local|vps  (default: auto — dev always am-dev-apps;
-#     preprod retargets when already on am-dev-apps, NONPROD_ORIGIN=local,
-#     or Argo cluster am-vps-nonprod connection != Successful)
+#   NONPROD_ORIGIN=local|vps  (default: auto)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

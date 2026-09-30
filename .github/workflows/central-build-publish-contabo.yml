@@ -407,7 +407,7 @@ jobs:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
           ref: main
-          token: ${{ secrets.GITHUB_PAT || github.token }}
+          token: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || github.token }}
 
       - name: Resolve image tag
         id: tag
@@ -471,7 +471,7 @@ jobs:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
           ref: main
-          token: ${{ secrets.GITHUB_PAT || github.token }}
+          token: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || github.token }}
 
       - name: Resolve image tag
         id: tag
@@ -500,7 +500,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${ARGOCD_AUTH_TOKEN:-}" || -z "${ARGOCD_SERVER:-}" ]]; then
-            echo "::error::Missing ARGOCD_AUTH_TOKEN / ARGOCD_SERVER for Contabo Argo (job environment='${{ matrix.env }}'). Set both as repo secrets and on GitHub Environments dig/preprod/prod/dr (same pattern as am-gateways)."
+            echo "::error::Missing ARGOCD_AUTH_TOKEN / ARGOCD_SERVER for Contabo Argo (job environment='${{ matrix.env }}'). Prefer org secrets on AM-Portfolio, or run: pwsh am-pipelines/scripts/ci/sync-contabo-ci-secrets.ps1"
             exit 1
           fi
           chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh
@@ -510,7 +510,7 @@ jobs:
       - name: Contabo promote + wait (prod / dr)
         if: matrix.env == 'prod' || matrix.env == 'dr'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_PAT || github.token }}
+          GH_TOKEN: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || github.token }}
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
           INPUT_SERVICE_NAME: ${{ inputs.image_name }}

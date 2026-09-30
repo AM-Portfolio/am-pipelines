@@ -96,7 +96,7 @@ fi
 # Build Application PUT body + Sync body (sources with helm.parameters) so AppSet wipe
 # between PUT and sync cannot drop the tag for this sync operation.
 BUILT="$(
-  echo "$RAW" | TAG="$TAG" python3 -c "$(cat <<'PY'
+  echo "$RAW" | TAG="$TAG" SVC="$SVC" INPUT_IMAGE_REPOSITORY="${INPUT_IMAGE_REPOSITORY:-}" python3 -c "$(cat <<'PY'
 import json, os, sys
 
 app = json.load(sys.stdin)
@@ -118,12 +118,22 @@ if idx < 0:
 
 src = dict(sources[idx])
 helm = dict(src.get("helm") or {})
+drop = {"global.image.tag", "global.image.digest", "image.repository"}
 params = [
     p
     for p in list(helm.get("parameters") or [])
-    if (p.get("name") or "") not in ("global.image.tag", "global.image.digest")
+    if (p.get("name") or "") not in drop
 ]
 params.append({"name": "global.image.tag", "value": tag})
+# Contabo CI pushes repo-scoped GHCR path ghcr.io/<owner>/<git-repo>/<image>
+# for bare image_name (see central-build-publish-contabo). Flat am-ai-gateway 403s.
+svc = os.environ.get("SVC") or ""
+repo_override = (os.environ.get("INPUT_IMAGE_REPOSITORY") or "").strip()
+if not repo_override and svc == "am-ai-gateway":
+    repo_override = "am-gateways/am-ai-gateway"
+if repo_override:
+    params.append({"name": "image.repository", "value": repo_override})
+    print("OK: also set image.repository=%s" % repo_override, file=sys.stderr)
 helm["parameters"] = params
 src["helm"] = helm
 sources[idx] = src

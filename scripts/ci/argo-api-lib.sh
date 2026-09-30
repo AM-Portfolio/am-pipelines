@@ -66,7 +66,8 @@ argo_api() {
       continue
     fi
     # Contabo Argo → Kind am-dev-apps via kubeapi-dev sometimes EOFs / returns empty discovery briefly.
-    if [[ "$http" == "500" ]] && echo "$resp" | grep -qiE 'EOF|failed to get server version|getting k8s server version|connection reset|discover server resources|zero resources returned'; then
+    # Also: Contabo Kind CoreDNS → Docker DNS (172.18.0.1) can SERVFAIL ("server misbehaving") for kubeapi-*.asrax.in.
+    if [[ "$http" == "500" ]] && echo "$resp" | grep -qiE 'EOF|failed to get server version|getting k8s server version|connection reset|discover server resources|zero resources returned|server misbehaving|lookup kubeapi|no such host|i/o timeout'; then
       sleep_s=$(( attempt < 4 ? attempt * 8 : 45 ))
       echo "::warning::Argo API ${method} ${path} HTTP 500 (Kind API transient) — retry ${attempt}/${max} in ${sleep_s}s" >&2
       sleep "$sleep_s"
@@ -74,9 +75,17 @@ argo_api() {
       continue
     fi
     # Contabo may surface broken Kind discovery as 403 (not only 500) while tunnel/proxy heals.
-    if [[ "$http" == "403" ]] && echo "$resp" | grep -qiE 'discover server resources|zero resources returned|failed to get server version|getting k8s server version'; then
+    if [[ "$http" == "403" ]] && echo "$resp" | grep -qiE 'discover server resources|zero resources returned|failed to get server version|getting k8s server version|server misbehaving|lookup kubeapi'; then
       sleep_s=$(( attempt < 4 ? attempt * 8 : 45 ))
       echo "::warning::Argo API ${method} ${path} HTTP 403 (Kind API discover transient) — retry ${attempt}/${max} in ${sleep_s}s" >&2
+      sleep "$sleep_s"
+      attempt=$((attempt + 1))
+      continue
+    fi
+    # Contabo argocd-repo-server flaps (SVC 10.96.x:8081 connection refused) → Application PUT 400 InvalidSpec.
+    if [[ "$http" == "400" ]] && echo "$resp" | grep -qiE 'repo client error|connection refused|repository not accessible|Unavailable'; then
+      sleep_s=$(( attempt < 4 ? attempt * 8 : 45 ))
+      echo "::warning::Argo API ${method} ${path} HTTP 400 (repo-server transient) — retry ${attempt}/${max} in ${sleep_s}s" >&2
       sleep "$sleep_s"
       attempt=$((attempt + 1))
       continue

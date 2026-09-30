@@ -147,6 +147,11 @@ on:
       ARGOCD_SERVER:
         required: false
         description: "Contabo Argo CD base URL (default https://argocd.asrax.in)"
+      AM_GITHUB_PAT:
+        required: false
+        description: >-
+          PAT or GitHub App token with contents:write on am-gitops (and am-pipelines checkout).
+          Name cannot be GITHUB_PAT (reserved prefix). Callers: secrets: inherit.
       KUBECONFIG_NONPROD:
         required: false
         description: "DEPRECATED â€” refused by CI. Do not store kubeconfig in GitHub. Use Argo API."

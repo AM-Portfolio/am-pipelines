@@ -25,6 +25,15 @@ argo_require_token() {
     echo "::error::ARGOCD_AUTH_TOKEN is required (Argo API only — never store kubeconfig in GitHub)."
     exit 1
   fi
+  ARGOCD_SERVER="${ARGOCD_SERVER:-https://argocd.asrax.in}"
+  ARGOCD_SERVER="${ARGOCD_SERVER//$'\r'/}"
+  ARGOCD_SERVER="${ARGOCD_SERVER//$'\n'/}"
+  ARGOCD_SERVER="${ARGOCD_SERVER%/}"
+  if [[ ! "$ARGOCD_SERVER" =~ ^https://[A-Za-z0-9._-]+(/.*)?$ ]]; then
+    echo "::error::ARGOCD_SERVER must be an https host URL (e.g. https://argocd.asrax.in). Got malformed value (len=${#ARGOCD_SERVER}). Re-run sync-contabo-ci-secrets.ps1."
+    exit 1
+  fi
+  export ARGOCD_SERVER
 }
 
 argo_api() {

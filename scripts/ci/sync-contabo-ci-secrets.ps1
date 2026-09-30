@@ -67,21 +67,26 @@ function Get-EnrolledRepos([string]$gitops) {
 }
 
 function Set-RepoSecret([string]$repo, [string]$name, [string]$value) {
+  $value = $value.Trim().Trim("`r").Trim("`n")
+  if ($name -eq "ARGOCD_SERVER" -and $value -notmatch '^https://[A-Za-z0-9._-]+$') {
+    throw "Refusing to set ARGOCD_SERVER on $repo — expected https host URL, got len=$($value.Length)"
+  }
   if ($DryRun) {
     Write-Host "DRYRUN gh secret set $name -R $repo (len=$($value.Length))"
     return
   }
-  $value | gh secret set $name -R $repo
+  gh secret set $name -R $repo --body $value
   if ($LASTEXITCODE -ne 0) { throw "gh secret set $name -R $repo failed (exit $LASTEXITCODE)" }
-  Write-Host "OK $repo :: $name"
+  Write-Host "OK $repo :: $name (len=$($value.Length))"
 }
 
 function Set-OrgSecret([string]$name, [string]$value) {
+  $value = $value.Trim().Trim("`r").Trim("`n")
   if ($DryRun) {
     Write-Host "DRYRUN gh secret set $name --org $Org --visibility $OrgVisibility (len=$($value.Length))"
     return
   }
-  $value | gh secret set $name --org $Org --visibility $OrgVisibility
+  gh secret set $name --org $Org --visibility $OrgVisibility --body $value
   if ($LASTEXITCODE -ne 0) { throw "gh secret set $name --org $Org failed (exit $LASTEXITCODE)" }
   Write-Host "OK org/$Org :: $name (visibility=$OrgVisibility)"
 }

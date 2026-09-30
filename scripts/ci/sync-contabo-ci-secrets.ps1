@@ -69,7 +69,7 @@ function Get-EnrolledRepos([string]$gitops) {
 function Set-RepoSecret([string]$repo, [string]$name, [string]$value) {
   $value = $value.Trim().Trim("`r").Trim("`n")
   if ($name -eq "ARGOCD_SERVER" -and $value -notmatch '^https://[A-Za-z0-9._-]+$') {
-    throw "Refusing to set ARGOCD_SERVER on $repo — expected https host URL, got len=$($value.Length)"
+    throw "Refusing to set ARGOCD_SERVER on $repo - expected https host URL, got len=$($value.Length)"
   }
   if ($DryRun) {
     Write-Host "DRYRUN gh secret set $name -R $repo (len=$($value.Length))"

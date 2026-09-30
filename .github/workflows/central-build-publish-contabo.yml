@@ -156,7 +156,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # â”€â”€ Java â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      # ── Java ──────────────────────────────────────────────
       - name: Set up JDK
         if: ${{ inputs.language == 'java' }}
         uses: actions/setup-java@v4
@@ -225,7 +225,7 @@ jobs:
             mvn -B -f "${{ github.workspace }}/${MODULE}/pom.xml" test || echo "Test step failed or skipped"
           fi
 
-      # â”€â”€ Python â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      # ── Python ────────────────────────────────────────────
       - name: Set up Python
         if: ${{ inputs.language == 'python' }}
         uses: actions/setup-python@v5
@@ -246,7 +246,7 @@ jobs:
           flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
           pytest || echo "Tests failed or not found - marking as skipped for now"
 
-      # â”€â”€ Node.js / React â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      # ── Node.js / React ───────────────────────────────────
       - name: Set up Node.js
         if: ${{ inputs.language == 'node' || inputs.language == 'react' }}
         uses: actions/setup-node@v4
@@ -267,7 +267,7 @@ jobs:
         if: ${{ inputs.language == 'node' || inputs.language == 'react' }}
         run: npm test --if-present
 
-      # â”€â”€ Docker â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      # ── Docker ────────────────────────────────────────────
       - name: Log in to GitHub Container Registry
         if: ${{ inputs.image_name != '' }}
         uses: docker/login-action@v3

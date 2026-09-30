@@ -41,10 +41,10 @@ argo_api() {
   argo_require_token
   local url="${ARGOCD_SERVER}${path}"
   # Contabo sits behind Cloudflare — 502/503/504/429 are retryable (origin overload).
-  local attempt=1 max="${ARGO_API_RETRIES:-8}"
+  local attempt=1 max="${ARGO_API_RETRIES:-12}"
   local resp http sleep_s
   while (( attempt <= max )); do
-    local args=(-sS -w "\n%{http_code}" -X "$method" -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" -H "Content-Type: application/json" -H "User-Agent: am-pipelines-ci")
+    local args=(-sS --connect-timeout 30 --max-time 300 -w "\n%{http_code}" -X "$method" -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" -H "Content-Type: application/json" -H "User-Agent: am-pipelines-ci")
     if [[ -n "$body" ]]; then
       args+=(-d "$body")
     fi
@@ -56,18 +56,27 @@ argo_api() {
       return 0
     fi
     # Contabo sits behind Cloudflare — 502/503/504/429/520–524 are retryable (origin overload / CF edge).
-    if [[ "$http" == "502" || "$http" == "503" || "$http" == "504" || "$http" == "429" || "$http" == "520" || "$http" == "521" || "$http" == "522" || "$http" == "523" || "$http" == "524" ]]; then
-      # Cloudflare retry_after often ~60s on 502; backoff grows but caps at 60
-      sleep_s=$(( attempt < 4 ? attempt * 5 : 60 ))
-      echo "::warning::Argo API ${method} ${path} HTTP ${http} (transient) — retry ${attempt}/${max} in ${sleep_s}s" >&2
+    # Also retry curl transport failures (empty http / 000) when CF/Argo is slow.
+    if [[ -z "$http" || "$http" == "000" || "$http" == "502" || "$http" == "503" || "$http" == "504" || "$http" == "429" || "$http" == "520" || "$http" == "521" || "$http" == "522" || "$http" == "523" || "$http" == "524" ]]; then
+      # Cloudflare retry_after often ~60s on 502; backoff grows but caps at 90
+      sleep_s=$(( attempt < 4 ? attempt * 5 : 90 ))
+      echo "::warning::Argo API ${method} ${path} HTTP ${http:-000} (transient) — retry ${attempt}/${max} in ${sleep_s}s" >&2
       sleep "$sleep_s"
       attempt=$((attempt + 1))
       continue
     fi
-    # Contabo Argo → Kind am-vps-nonprod (:6443) sometimes EOFs briefly; Application PUT/sync returns 500.
-    if [[ "$http" == "500" ]] && echo "$resp" | grep -qiE 'EOF|failed to get server version|getting k8s server version|connection reset'; then
+    # Contabo Argo → Kind am-dev-apps via kubeapi-dev sometimes EOFs / returns empty discovery briefly.
+    if [[ "$http" == "500" ]] && echo "$resp" | grep -qiE 'EOF|failed to get server version|getting k8s server version|connection reset|discover server resources|zero resources returned'; then
       sleep_s=$(( attempt < 4 ? attempt * 8 : 45 ))
       echo "::warning::Argo API ${method} ${path} HTTP 500 (Kind API transient) — retry ${attempt}/${max} in ${sleep_s}s" >&2
+      sleep "$sleep_s"
+      attempt=$((attempt + 1))
+      continue
+    fi
+    # Contabo may surface broken Kind discovery as 403 (not only 500) while tunnel/proxy heals.
+    if [[ "$http" == "403" ]] && echo "$resp" | grep -qiE 'discover server resources|zero resources returned|failed to get server version|getting k8s server version'; then
+      sleep_s=$(( attempt < 4 ? attempt * 8 : 45 ))
+      echo "::warning::Argo API ${method} ${path} HTTP 403 (Kind API discover transient) — retry ${attempt}/${max} in ${sleep_s}s" >&2
       sleep "$sleep_s"
       attempt=$((attempt + 1))
       continue

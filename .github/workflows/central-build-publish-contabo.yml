@@ -386,15 +386,17 @@ jobs:
           severity: "CRITICAL,HIGH"
           exit-code: "0" # Non-blocking (reports but continues)
 
-  # Auto sync Contabo preprod â€” main push only; no am-gitops commit
+  # Auto sync Contabo preprod — main push or manual dispatch on main; no am-gitops commit
   auto-sync-preprod:
-    name: Auto sync â†’ preprod (no gitops commit)
+    name: Auto sync → preprod (no gitops commit)
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
     if: |
       always() &&
       inputs.image_name != '' &&
-      github.event_name == 'push' &&
-      (github.ref_name == 'main' || github.ref_name == 'master') &&
+      (
+        (github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')) ||
+        (github.event_name == 'workflow_dispatch' && (github.ref_name == 'main' || github.ref_name == 'master'))
+      ) &&
       needs.build.result == 'success' &&
       (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
       (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
@@ -439,19 +441,19 @@ jobs:
           am-pipelines-repo/scripts/ci/argo-sync-and-wait.sh
 
   contabo-approve:
-    name: Contabo Argo â†’ ${{ matrix.env }} (approve)
+    name: Contabo Argo → ${{ matrix.env }} (approve)
     # Removed auto-sync-preprod from needs so it runs in parallel
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
     if: |
       always() &&
       inputs.image_name != '' &&
-      (github.event_name == 'push' || github.event_name == 'pull_request') &&
+      (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch') &&
       needs.build.result == 'success' &&
-      (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
+      (needs.vulnerability-scan.result == 'success' || needs.vulnerability_scan.result == 'skipped') &&
       (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
       (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped') &&
       (
-        (github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')) ||
+        ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref_name == 'main' || github.ref_name == 'master')) ||
         (github.head_ref || github.ref_name) == 'develop' ||
         startsWith(github.head_ref || github.ref_name, 'feature/') ||
         startsWith(github.head_ref || github.ref_name, 'feat/') ||
@@ -461,7 +463,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        env: ${{ fromJSON((github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')) && '["dev","preprod","prod","dr"]' || '["dev","preprod"]') }}
+        env: ${{ fromJSON(((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref_name == 'main' || github.ref_name == 'master')) && '["dev","preprod","prod","dr"]' || '["dev","preprod"]') }}
     runs-on: ubuntu-latest
     environment: ${{ matrix.env }}
     permissions:

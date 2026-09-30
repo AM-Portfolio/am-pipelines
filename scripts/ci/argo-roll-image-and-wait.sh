@@ -117,44 +117,62 @@ def vps_unreachable():
 
 force_dr = False
 reason = ""
+# SoT (NONPROD_DUAL / DEPLOY_MODEL):
+#   dig     -> always am-dev-apps / am-apps-dev
+#   preprod -> am-vps-nonprod / am-apps-preprod when Contabo nonprod is up;
+#              failover to am-dev-apps only while VPS unreachable or NONPROD_ORIGIN=local
 if env == "dev":
     force_dr = True
     reason = "dev always nonprod-dr (am-dev-apps)"
 elif origin == "local":
     force_dr = True
     reason = "NONPROD_ORIGIN=local"
-elif cur_name == "am-dev-apps":
-    force_dr = True
-    reason = "Application already on am-dev-apps"
-elif origin != "vps" and vps_unreachable():
-    force_dr = True
-    reason = "am-vps-nonprod connection=%s - failover nonprod-dr" % (vps_conn or "down")
 elif origin == "vps":
     force_dr = False
-    reason = "NONPROD_ORIGIN=vps (keep Contabo nonprod-main)"
+    reason = "NONPROD_ORIGIN=vps (Contabo nonprod-main)"
+elif vps_unreachable():
+    force_dr = True
+    reason = "am-vps-nonprod connection=%s - failover nonprod-dr" % (vps_conn or "down")
 else:
+    # VPS Successful: do NOT stay stuck on am-dev-apps from a prior failover
     force_dr = False
-    reason = "keep destination name=%s" % (cur_name or "empty")
+    reason = "am-vps-nonprod Successful — keep/restore Contabo nonprod-main"
 
 changed = False
-if force_dr and (cur_name != want_name or cur_ns != want_ns):
-    dest["name"] = want_name
-    dest["namespace"] = want_ns
-    dest.pop("server", None)
-    app.setdefault("spec", {})["destination"] = dest
-    changed = True
-    print(
-        "RETARGET dest %s/%s -> %s/%s (%s)"
-        % (cur_name, cur_ns, want_name, want_ns, reason),
-        file=sys.stderr,
-    )
-elif force_dr:
-    print("OK dest already %s/%s (%s)" % (want_name, want_ns, reason), file=sys.stderr)
+if force_dr:
+    if cur_name != want_name or cur_ns != want_ns:
+        dest["name"] = want_name
+        dest["namespace"] = want_ns
+        dest.pop("server", None)
+        app.setdefault("spec", {})["destination"] = dest
+        changed = True
+        print(
+            "RETARGET dest %s/%s -> %s/%s (%s)"
+            % (cur_name, cur_ns, want_name, want_ns, reason),
+            file=sys.stderr,
+        )
+    else:
+        print("OK dest already %s/%s (%s)" % (want_name, want_ns, reason), file=sys.stderr)
 else:
-    print(
-        "OK dest unchanged name=%s ns=%s (%s)" % (cur_name, cur_ns, reason),
-        file=sys.stderr,
-    )
+    # Restore Contabo nonprod-main when recovering from failover
+    want_vps = "am-vps-nonprod"
+    want_vps_ns = "am-apps-preprod" if env == "preprod" else cur_ns
+    if env == "preprod" and (cur_name != want_vps or cur_ns != want_vps_ns):
+        dest["name"] = want_vps
+        dest["namespace"] = want_vps_ns
+        dest.pop("server", None)
+        app.setdefault("spec", {})["destination"] = dest
+        changed = True
+        print(
+            "RETARGET dest %s/%s -> %s/%s (%s)"
+            % (cur_name, cur_ns, want_vps, want_vps_ns, reason),
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "OK dest unchanged name=%s ns=%s (%s)" % (cur_name, cur_ns, reason),
+            file=sys.stderr,
+        )
 
 json.dump({"app": app, "changed": changed}, sys.stdout)
 PY
@@ -163,7 +181,7 @@ PY
 CHANGED="$(echo "$DEST_PATCHED" | python3 -c 'import json,sys; print("1" if json.load(sys.stdin).get("changed") else "0")')"
 RAW="$(echo "$DEST_PATCHED" | python3 -c 'import json,sys; json.dump(json.load(sys.stdin)["app"], sys.stdout)')"
 if [[ "$CHANGED" == "1" ]]; then
-  echo "::notice::Retargeted ${APP} destination to nonprod-dr (am-dev-apps) — Contabo VPS down / failover"
+  echo "::notice::Retargeted ${APP} destination (${ENV}) — Contabo VPS / NONPROD_ORIGIN policy"
 fi
 
 # Build Application PUT body + Sync body (sources with helm.parameters) so AppSet wipe

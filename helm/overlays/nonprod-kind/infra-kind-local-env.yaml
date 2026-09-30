@@ -1,0 +1,17 @@
+# Kind-local infra. Do not use *.asrax.in TCP gateways (those A records are Contabo).
+env:
+  KAFKA_BOOTSTRAP_SERVERS: "kafka.infra.svc.cluster.local:9092"
+  PROJ_KAFKA_BOOTSTRAP_SERVERS: "kafka.infra.svc.cluster.local:9092"
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: "kafka.infra.svc.cluster.local:9092"
+  KAFKA_SECURITY_PROTOCOL: "PLAINTEXT"
+  SPRING_KAFKA_PROPERTIES_SECURITY_PROTOCOL: "PLAINTEXT"
+  REDIS_HOST: "redis-master.infra.svc.cluster.local"
+  REDIS_PORT: "6379"
+  SPRING_DATA_REDIS_HOST: "redis-master.infra.svc.cluster.local"
+  SPRING_DATA_REDIS_PORT: "6379"
+  SPRING_DATA_MONGODB_HOST: "mongodb.infra.svc.cluster.local"
+  SPRING_DATA_MONGODB_PORT: "27017"
+  SPRING_DATASOURCE_HOST: "postgresql.infra.svc.cluster.local"
+  SPRING_DATASOURCE_PORT: "5432"
+  INFLUX_HOST: "influxdb-influxdb2.infra.svc.cluster.local"
+  INFLUX_PORT: "80"

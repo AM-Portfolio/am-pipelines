@@ -33,10 +33,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
-{{/* Vault API address: HTTPS preferred; HTTP fallback when useAddressFallback is set (Kind in-cluster). */}}
+{{/* Vault API address. HTTPS only (https://vault.asrax.in). No HTTP, no port-forward. */}}
 {{- define "universal-chart.vaultAddress" -}}
 {{- $useFb := or .Values.global.vault.useAddressFallback (and .Values.vault .Values.vault.useAddressFallback | default false) -}}
-{{- $fallback := .Values.global.vault.addressFallback | default (and .Values.vault .Values.vault.addressFallback) | default "http://vault.vault.svc:8200" -}}
+{{- $fallback := .Values.global.vault.addressFallback | default (and .Values.vault .Values.vault.addressFallback) | default "https://vault.asrax.in" -}}
 {{- $preferred := .Values.global.vault.address | default (and .Values.vault .Values.vault.address) | default "https://vault.asrax.in" -}}
 {{- if $useFb -}}
 {{- $fallback -}}

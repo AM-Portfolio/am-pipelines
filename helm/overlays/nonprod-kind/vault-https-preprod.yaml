@@ -1,0 +1,20 @@
+# Kind preprod Vault (HTTPS). Not Contabo vault.asrax.in.
+# CSI uses Kubernetes auth (am-backend-role) on this cluster.
+# Matches am-gitops/preprod/values-overlays/vault-https-preprod.yaml.
+global:
+  vault:
+    enabled: true
+    address: "https://vault-preprod.asrax.in"
+    useAddressFallback: false
+    authPath: auth/kubernetes
+    role: am-backend-role
+    csi:
+      enabled: true
+
+vault:
+  enabled: true
+  address: "https://vault-preprod.asrax.in"
+  authPath: auth/kubernetes
+  role: am-backend-role
+  csi:
+    enabled: true

@@ -1,4 +1,7 @@
-name: Central Build & Publish
+name: Central Build & Publish (Contabo gateways)
+
+# Slim reusable for am-gateways: no Feature GHCR notice, no GitOps pin, no Contabo-central.
+# Graph: Secrets+IaC â†’ Build â†’ Vuln â†’ Auto sync (main only) + Contabo Approve matrix.
 
 on:
   workflow_call:
@@ -6,158 +9,59 @@ on:
       language:
         required: true
         type: string
-        description: "The primary language of the project (e.g., java, python, node, react)"
       working_directory:
         required: true
         type: string
-        description: "The base directory of the sub-component relative to repo root"
       image_name:
-        required: false
+        required: true
         type: string
-        description: "Contabo / Argo service name and default image leaf (e.g. am-modern-ui)"
+        description: "Contabo / Argo service name (e.g. am-api-gateway). Also default GHCR path."
       ghcr_image_name:
         required: false
         type: string
         default: ""
         description: >-
           Optional GHCR path under owner. Empty = <git-repo>/<image_name>
-          (repo-scoped so github.token can write_package). Pass explicit path
-          only to override.
+          (repo-scoped so github.token can write_package).
       registry:
         required: false
         type: string
         default: "ghcr.io"
-        description: "Container registry to push to"
       build_context:
         required: false
         type: string
         default: "."
-        description: "Docker build context relative to working_directory"
-      preprod_namespace:
-        required: false
-        type: string
-        default: "am-apps-preprod"
-        description: "Kubernetes namespace for preprod"
-      dev_namespace:
-        required: false
-        type: string
-        default: "am-apps-dev"
-        description: "Kubernetes namespace for development"
-      prod_namespace:
-        required: false
-        type: string
-        default: "am-apps-prod"
-        description: "Kubernetes namespace for prod"
-      # Deprecated no-ops (kept for caller API compat). Contabo Argo only â€” no Helm from GHA.
-      deploy_dev:
-        required: false
-        type: boolean
-        default: false
-        description: "Deprecated no-op. Dev = Manual Deploy / am gitops set-tag + Contabo Argo."
-      deploy_prod:
-        required: false
-        type: boolean
-        default: false
-        description: "Deprecated no-op. Prod = Manual Deploy promote + Contabo Argo (never Helm)."
-      deploy_preprod:
-        required: false
-        type: boolean
-        default: true
-        description: >-
-          Feature-branch: GHCR only notice job. Main: Contabo Argo preprod after gitops pin.
-      force_preprod_helm:
-        required: false
-        type: boolean
-        default: false
-        description: "Deprecated no-op. Helm removed from central-build-publish."
       skip_security_scan:
         required: false
         type: boolean
         default: false
-        description: "Skip internal security scans (set true when caller already ran a shared security gate)"
       skip_secrets_scan:
         required: false
         type: boolean
         default: false
-        description: "Skip internal secrets scan (TruffleHog)"
       skip_iac_scan:
         required: false
         type: boolean
         default: false
-        description: "Skip internal IaC configuration scan (Checkov)"
       skip_vulnerability_scan:
         required: false
         type: boolean
         default: false
-        description: "Skip internal Docker image vulnerability scan (Trivy)"
-      gh_env_dev:
-        required: false
-        type: string
-        description: "Explicit GitHub environment name for dev deployment approval"
-      gh_env_preprod:
-        required: false
-        type: string
-        description: "Explicit GitHub environment name for preprod deployment approval"
-      gh_env_prod:
-        required: false
-        type: string
-        description: "Explicit GitHub environment name for prod deployment approval"
       no_cache:
         required: false
         type: boolean
         default: false
-        description: "Force Docker to build without using cache"
-      gitops_write_preprod:
-        required: false
-        type: boolean
-        # Default on: main/master bumps am-gitops pins when digest changes (SoT + Argo sync).
-        default: true
-        description: >-
-          Auto-commit image tag/digest to AM-Portfolio/am-gitops preprod/image-tags + releases/preprod
-          when digest changes. Default true on main/master. Needs GITHUB_PAT contents:write on am-gitops.
-      gitops_values_repo:
-        required: false
-        type: string
-        default: ""
-        description: "Service values repo URL for freeze (default: caller github.repository)"
-      gitops_values_path:
-        required: false
-        type: string
-        default: ""
-        description: "Path under values repo to helm/ (default: working_directory)"
-      contabo_wait_preprod:
-        required: false
-        type: boolean
-        default: true
-        description: >-
-          When true (default), Contabo Argo sync+wait preprod runs after gitops pin (serial).
-          Set false when using contabo_approve (parallel Environment Approve after Build).
-      contabo_approve:
-        required: false
-        type: boolean
-        default: false
-        description: >-
-          When true, Contabo Argo Environment Approve jobs run as siblings of Feature notice /
-          GitOps after Build (dev+preprod on feat/PR; all four on main). No second image build.
     secrets:
       ARGOCD_AUTH_TOKEN:
         required: false
-        description: >-
-          Contabo Argo CD API token (am-gitops argo-sync-on-tags for all envs after pin pushes).
       ARGOCD_SERVER:
         required: false
-        description: "Contabo Argo CD base URL (default https://argocd.asrax.in)"
       AM_GITHUB_PAT:
         required: false
-        description: >-
-          PAT or GitHub App token with contents:write on am-gitops (and am-pipelines checkout).
-          Name cannot be GITHUB_PAT (reserved prefix). Callers: secrets: inherit.
       KUBECONFIG_NONPROD:
         required: false
-        description: "DEPRECATED â€” refused by CI. Do not store kubeconfig in GitHub. Use Argo API."
       KUBECONFIG_PROD:
         required: false
-        description: "DEPRECATED â€” refused by CI. Prod = promote + Argo only."
     outputs:
       image_tag:
         description: "Published GHCR image tag (run id)"
@@ -170,10 +74,6 @@ on:
         value: ${{ jobs.build.outputs.image_repository }}
 
 jobs:
-  # ============================================================
-  # SECURITY SCAN â€” GitHub-hosted runner
-  # Scans for secrets (tokens, keys) using TruffleHog OSS
-  # ============================================================
   security-scan:
     name: Security Scan (Secrets)
     # Skip when caller already ran a shared security gate (e.g. unified-ci.yml)
@@ -197,6 +97,7 @@ jobs:
   # MISCONFIG SCAN (IaC) â€” GitHub-hosted runner
   # Scans Helm charts and Terraform for security misconfigurations
   # ============================================================
+
   misconfig-scan:
     name: Security Scan (IaC)
     # Skip when caller already ran a shared security gate (e.g. unified-ci.yml)
@@ -223,6 +124,7 @@ jobs:
   # BUILD â€” GitHub-hosted runner
   # Compiles, tests, builds and pushes Docker image to GHCR
   # ============================================================
+
   build:
     name: Build & Push
     needs: [security-scan, misconfig-scan]
@@ -368,7 +270,7 @@ jobs:
           # blocks login (|| does not fall through). Cross-repo pulls need package Actions access.
           password: ${{ github.token }}
 
-      # Existing org packages often lack "Actions access" for this repo → write_package.
+      # Existing org packages often lack "Actions access" for this repo → push write_package.
       # Default push path is repo-scoped: <git-repo>/<image_name> (github.token can write).
       - name: Ensure GHCR package linked to this repository
         if: ${{ inputs.image_name != '' }}
@@ -442,164 +344,6 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 
-  # ============================================================
-  # GITOPS â€” auto-commit preprod image-tags (SoT). Contabo Argo follows.
-  # Requires org GITHUB_PAT (or GHCR_TOKEN) with contents:write on am-gitops.
-  # ============================================================
-  gitops-preprod:
-    name: GitOps â†’ Preprod image-tags
-    needs: [build, vulnerability-scan, misconfig-scan, security-scan]
-    runs-on: ubuntu-latest
-    if: |
-      always() &&
-      inputs.image_name != '' &&
-      inputs.gitops_write_preprod == true &&
-      inputs.contabo_approve != true &&
-      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') &&
-      needs.build.result == 'success' &&
-      (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
-      (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
-      (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout am-gitops
-        uses: actions/checkout@v4
-        with:
-          repository: AM-Portfolio/am-gitops
-          ref: main
-          token: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || github.token }}
-          path: am-gitops
-
-      - name: Resolve chart SHA
-        id: chart
-        env:
-          GH_TOKEN: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || github.token }}
-        run: |
-          SHA=$(gh api repos/AM-Portfolio/am-pipelines/commits/main --jq .sha)
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-
-      - name: Write freeze + image-tags
-        env:
-          SVC: ${{ inputs.image_name }}
-          DIGEST: ${{ needs.build.outputs.image_digest }}
-          TAG: ${{ needs.build.outputs.image_tag }}
-          REPO: ${{ needs.build.outputs.image_repository }}
-          CHART_SHA: ${{ steps.chart.outputs.sha }}
-          SOURCE_SHA: ${{ github.sha }}
-          VALUES_REPO_INPUT: ${{ inputs.gitops_values_repo }}
-          VALUES_PATH_INPUT: ${{ inputs.gitops_values_path }}
-          WORKING_DIRECTORY: ${{ inputs.working_directory }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          VALUES_REPO="${VALUES_REPO_INPUT:-https://github.com/${GITHUB_REPOSITORY}.git}"
-          VALUES_PATH="${VALUES_PATH_INPUT:-${WORKING_DIRECTORY}}"
-          mkdir -p "am-gitops/releases/preprod" "am-gitops/preprod/image-tags"
-          {
-            echo "# CI-written freeze â€” do not hand-edit for enrolled services"
-            echo "image:"
-            echo "  repository: ${REPO}"
-            echo "  digest: ${DIGEST}"
-            echo "  tag: \"${TAG}\""
-            echo "chart:"
-            echo "  repoURL: https://github.com/AM-Portfolio/am-pipelines.git"
-            echo "  path: helm/universal-chart"
-            echo "  targetRevision: \"${CHART_SHA}\""
-            echo "values:"
-            echo "  repoURL: ${VALUES_REPO}"
-            echo "  targetRevision: \"${SOURCE_SHA}\""
-            echo "  files:"
-            echo "    - ${VALUES_PATH}/helm/values.yaml"
-            echo "    - ${VALUES_PATH}/helm/vault-mappings.yaml"
-            echo "    - ${VALUES_PATH}/helm/values.preprod.yaml"
-            echo "sourceCommit: \"${SOURCE_SHA}\""
-          } > "am-gitops/releases/preprod/${SVC}.yaml"
-          {
-            echo "# Synced from releases/preprod/${SVC}.yaml (CI auto-commit)"
-            echo "global:"
-            echo "  image:"
-            if [ -n "${DIGEST}" ]; then
-              echo "    digest: \"${DIGEST}\""
-            fi
-            echo "    tag: \"${TAG}\""
-            echo "    imagePullSecrets:"
-            echo "      - name: ghcr-creds"
-          } > "am-gitops/preprod/image-tags/${SVC}.yaml"
-
-      - name: Commit and push
-        working-directory: am-gitops
-        env:
-          SVC: ${{ inputs.image_name }}
-          DIGEST: ${{ needs.build.outputs.image_digest }}
-          TAG: ${{ needs.build.outputs.image_tag }}
-        run: |
-          set -euo pipefail
-          git config user.name "am-gitops-bot"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          PIN="preprod/image-tags/${SVC}.yaml"
-          # Idempotent: compare NEW digest to what is on origin/main (not the file we just wrote)
-          if [[ -n "${DIGEST}" ]]; then
-            OLD="$(git show "HEAD:${PIN}" 2>/dev/null | grep -E '^\s*digest:' | head -1 | sed -E 's/.*"([^"]+)".*/\1/' || true)"
-            if [[ -n "$OLD" && "$OLD" == "$DIGEST" ]]; then
-              echo "No digest change (${DIGEST}) â€” skip gitops commit"
-              exit 0
-            fi
-          fi
-          git add "releases/preprod/${SVC}.yaml" "$PIN"
-          if git diff --cached --quiet; then
-            echo "No gitops changes"
-            exit 0
-          fi
-          git commit -m "freeze(preprod/${SVC}): ${TAG}"
-          git push origin HEAD:main
-
-  # ============================================================
-  # CONTABO ARGO â€” sync+wait preprod after main pin (fail if not Healthy)
-  # ============================================================
-  # Skipped when caller sets contabo_wait_preprod: false (gateways run Contabo in parallel approve jobs).
-  argo-preprod:
-    name: Contabo Argo â†’ preprod (central)
-    needs: [build, gitops-preprod]
-    runs-on: ubuntu-latest
-    if: |
-      always() &&
-      inputs.image_name != '' &&
-      inputs.gitops_write_preprod == true &&
-      inputs.contabo_wait_preprod &&
-      inputs.contabo_approve != true &&
-      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') &&
-      needs.build.result == 'success' &&
-      needs.gitops-preprod.result == 'success'
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout am-pipelines scripts
-        uses: actions/checkout@v4
-        with:
-          repository: AM-Portfolio/am-pipelines
-          path: am-pipelines-repo
-          ref: main
-          token: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || github.token }}
-
-      - name: Sync + wait Contabo Healthy/Synced
-        env:
-          ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
-          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
-          INPUT_SERVICE_NAME: ${{ inputs.image_name }}
-          INPUT_ENVIRONMENT: preprod
-          INPUT_IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
-        run: |
-          set -euo pipefail
-          sleep 5
-          chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh
-          chmod +x am-pipelines-repo/scripts/ci/argo-sync-and-wait.sh
-          am-pipelines-repo/scripts/ci/argo-sync-and-wait.sh
-
-  # ============================================================
-  # VULNERABILITY SCAN â€” GitHub-hosted runner
-  # Scans the built Docker image for CVEs
-  # ============================================================
   vulnerability-scan:
     name: Security Scan (Vulnerabilities)
     needs: build
@@ -642,30 +386,19 @@ jobs:
           severity: "CRITICAL,HIGH"
           exit-code: "0" # Non-blocking (reports but continues)
 
-  # ============================================================
-  # AUTO SYNC PREPROD â€” Contabo refresh only (NO am-gitops commit)
-  # Top rail when contabo_approve: sync live app; pin happens on Approve.
-  # ============================================================
+  # Auto sync Contabo preprod â€” main push only; no am-gitops commit
   auto-sync-preprod:
     name: Auto sync â†’ preprod (no gitops commit)
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
     if: |
       always() &&
-      inputs.contabo_approve == true &&
       inputs.image_name != '' &&
-      (github.event_name == 'push' || github.event_name == 'pull_request') &&
+      github.event_name == 'push' &&
+      (github.ref_name == 'main' || github.ref_name == 'master') &&
       needs.build.result == 'success' &&
       (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
       (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
-      (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped') &&
-      (
-        (github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')) ||
-        (github.head_ref || github.ref_name) == 'develop' ||
-        startsWith(github.head_ref || github.ref_name, 'feature/') ||
-        startsWith(github.head_ref || github.ref_name, 'feat/') ||
-        startsWith(github.head_ref || github.ref_name, 'fix/') ||
-        startsWith(github.head_ref || github.ref_name, 'hotfix/')
-      )
+      (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -700,45 +433,17 @@ jobs:
           INPUT_IMAGE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
-          echo "::notice::Auto sync Contabo preprod â€” no am-gitops commit. New tag deploys after Contabo Approve."
+          echo "::notice::Auto sync Contabo preprod â€” no am-gitops commit (main only)."
           chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh
           chmod +x am-pipelines-repo/scripts/ci/argo-sync-and-wait.sh
           am-pipelines-repo/scripts/ci/argo-sync-and-wait.sh
 
-  # ============================================================
-  # FEATURE BRANCH â€” GHCR publish only (no ci-image bot commits)
-  # ============================================================
-  preprod-feature-argo:
-    name: Feature â†’ GHCR only (no bot commit)
-    needs: [build, vulnerability-scan, misconfig-scan, security-scan]
-    runs-on: ubuntu-latest
-    if: |
-      always() &&
-      inputs.image_name != '' && inputs.deploy_preprod == true &&
-      github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' &&
-      needs.build.result == 'success' &&
-      (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
-      (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
-      (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
-    permissions:
-      contents: read
-      packages: read
-    steps:
-      - name: Notice â€” image published; no service-repo bot commit
-        run: |
-          TAG="${{ needs.build.outputs.image_tag || github.run_id }}"
-          echo "::notice::Image published to GHCR tag=${TAG}. No ci-image.yaml commit (avoids CI loops)."
-          echo "::notice::Contabo dev/preprod/prod/dr Approve: one Matrix box after Build. Auto sync preprod has no gitops commit."
-
-  # ============================================================
-  # CONTABO APPROVE â€” one Matrix box: dig + preprod (+ prod/dr on main)
-  # ============================================================
   contabo-approve:
     name: Contabo Argo â†’ ${{ matrix.env }} (approve)
+    # Removed auto-sync-preprod from needs so it runs in parallel
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
     if: |
       always() &&
-      inputs.contabo_approve == true &&
       inputs.image_name != '' &&
       (github.event_name == 'push' || github.event_name == 'pull_request') &&
       needs.build.result == 'success' &&
@@ -783,20 +488,26 @@ jobs:
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
-      - name: Contabo pin + wait (dev / preprod)
+      - name: Argo roll image + wait (dev/preprod â†’ Contabo)
         if: matrix.env == 'dev' || matrix.env == 'preprod'
         env:
-          GH_TOKEN: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || github.token }}
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
+          # Optional: force nonprod-dr (local) or nonprod-main (vps). Empty = auto
+          # (dev always am-dev-apps; preprod retargets when am-vps-nonprod â‰  Successful).
+          NONPROD_ORIGIN: ${{ vars.NONPROD_ORIGIN || '' }}
           INPUT_SERVICE_NAME: ${{ inputs.image_name }}
           INPUT_ENVIRONMENT: ${{ matrix.env }}
           INPUT_IMAGE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
+          if [[ -z "${ARGOCD_AUTH_TOKEN:-}" || -z "${ARGOCD_SERVER:-}" ]]; then
+            echo "::error::Missing ARGOCD_AUTH_TOKEN / ARGOCD_SERVER for Contabo Argo (job environment='${{ matrix.env }}'). Prefer org secrets on AM-Portfolio, or run: pwsh am-pipelines/scripts/ci/sync-contabo-ci-secrets.ps1"
+            exit 1
+          fi
           chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh
-          chmod +x am-pipelines-repo/scripts/ci/argo-pin-and-wait.sh
-          am-pipelines-repo/scripts/ci/argo-pin-and-wait.sh
+          chmod +x am-pipelines-repo/scripts/ci/argo-roll-image-and-wait.sh
+          am-pipelines-repo/scripts/ci/argo-roll-image-and-wait.sh
 
       - name: Contabo promote + wait (prod / dr)
         if: matrix.env == 'prod' || matrix.env == 'dr'
@@ -812,3 +523,4 @@ jobs:
           chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh
           chmod +x am-pipelines-repo/scripts/ci/argo-promote-and-wait.sh
           am-pipelines-repo/scripts/ci/argo-promote-and-wait.sh
+

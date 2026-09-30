@@ -1,0 +1,15 @@
+# HTTPS Vault for Kind nonprod CSI. No HTTP and no port-forward.
+global:
+  vault:
+    enabled: true
+    address: "https://vault.asrax.in"
+    useAddressFallback: false
+    authPath: auth/jwt-itsmart
+    role: am-backend-role
+    csi:
+      enabled: true
+
+vault:
+  enabled: true
+  csi:
+    enabled: true

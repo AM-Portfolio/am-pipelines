@@ -51,6 +51,14 @@ on:
         required: false
         type: boolean
         default: false
+      pipelines_ref:
+        required: false
+        type: string
+        default: "main"
+        description: >-
+          Git ref of AM-Portfolio/am-pipelines for Contabo scripts checkout.
+          When testing a fix/* branch, set this to the same ref as the workflow
+          uses: line (e.g. fix/contabo-stamp-env-secrets). Default main.
     secrets:
       ARGOCD_AUTH_TOKEN:
         required: false
@@ -410,7 +418,7 @@ jobs:
         with:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
-          ref: main
+          ref: ${{ inputs.pipelines_ref }}
           token: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || github.token }}
 
       - name: Resolve image tag
@@ -435,7 +443,7 @@ jobs:
           INPUT_IMAGE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
-          echo "::notice::Auto sync Contabo preprod â€” no am-gitops commit (main only)."
+          echo "::notice::Auto sync Contabo preprod no am-gitops commit (main only)."
           chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh
           chmod +x am-pipelines-repo/scripts/ci/argo-sync-and-wait.sh
           am-pipelines-repo/scripts/ci/argo-sync-and-wait.sh
@@ -474,7 +482,7 @@ jobs:
         with:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
-          ref: main
+          ref: ${{ inputs.pipelines_ref }}
           token: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || github.token }}
 
       - name: Resolve image tag
@@ -490,7 +498,7 @@ jobs:
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
-      - name: Argo roll image + wait (dev/preprod â†’ Contabo)
+      - name: Argo roll image + wait (dev/preprod → Contabo)
         if: matrix.env == 'dev' || matrix.env == 'preprod'
         env:
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}

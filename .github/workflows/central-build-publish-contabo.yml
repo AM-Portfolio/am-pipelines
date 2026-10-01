@@ -498,27 +498,39 @@ jobs:
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
-      - name: Argo roll image + wait (dev/preprod → Contabo)
-        if: matrix.env == 'dev' || matrix.env == 'preprod'
+      - name: Argo roll image + wait (dev → Contabo)
+        if: matrix.env == 'dev'
         env:
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
-          # Optional: force nonprod-dr (local) or nonprod-main (vps). Empty = auto
-          # (dev always am-dev-apps; preprod retargets when am-vps-nonprod â‰  Successful).
           NONPROD_ORIGIN: ${{ vars.NONPROD_ORIGIN || '' }}
           INPUT_SERVICE_NAME: ${{ inputs.image_name }}
-          INPUT_ENVIRONMENT: ${{ matrix.env }}
+          INPUT_ENVIRONMENT: dev
           INPUT_IMAGE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
           if [[ -z "${ARGOCD_AUTH_TOKEN:-}" || -z "${ARGOCD_SERVER:-}" ]]; then
-            echo "::error::Missing ARGOCD_AUTH_TOKEN / ARGOCD_SERVER for Contabo Argo (job environment='${{ matrix.env }}'). Prefer org secrets on AM-Portfolio, or run: pwsh am-pipelines/scripts/ci/sync-contabo-ci-secrets.ps1"
+            echo "::error::Missing ARGOCD_AUTH_TOKEN / ARGOCD_SERVER for Contabo Argo (job environment='dev')."
             exit 1
           fi
           chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh
           chmod +x am-pipelines-repo/scripts/ci/argo-roll-image-and-wait.sh
           am-pipelines-repo/scripts/ci/argo-roll-image-and-wait.sh
 
+      - name: Pin tag + wait (preprod → Contabo am-gitops)
+        if: matrix.env == 'preprod'
+        env:
+          GH_TOKEN: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || github.token }}
+          ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
+          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
+          INPUT_SERVICE_NAME: ${{ inputs.image_name }}
+          INPUT_ENVIRONMENT: preprod
+          INPUT_IMAGE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh
+          chmod +x am-pipelines-repo/scripts/ci/argo-pin-and-wait.sh
+          am-pipelines-repo/scripts/ci/argo-pin-and-wait.sh
       - name: Contabo promote + wait (prod / dr)
         if: matrix.env == 'prod' || matrix.env == 'dr'
         env:

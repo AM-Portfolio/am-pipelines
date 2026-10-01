@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Contabo Approve path for dev/preprod: pin first (gitops webhook SoT), then sync.
+# Contabo Approve / Auto sync path for dev/preprod: pin first (gitops webhook SoT), then sync.
 # Avoids long Application PUT through Cloudflare (HTTP 504 on argocd.asrax.in).
 #
 # Env:
 #   INPUT_SERVICE_NAME, INPUT_ENVIRONMENT (dev|preprod), INPUT_IMAGE_TAG
 #   GH_TOKEN / GITHUB_TOKEN, ARGOCD_AUTH_TOKEN
 # Optional: ARGOCD_SERVER, WAIT_PIN_SECONDS (default 300), WAIT_HEALTH_SECONDS
+#           PIN_SYNC_ATTEMPTS (default 3) — short sync retries after pin lag
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,7 +17,7 @@ SVC="${INPUT_SERVICE_NAME:?}"
 ENV_RAW="${INPUT_ENVIRONMENT:?}"
 TAG="${INPUT_IMAGE_TAG:?}"
 WAIT_PIN="${WAIT_PIN_SECONDS:-300}"
-APP="${SVC}-${ENV_RAW}"
+SYNC_ATTEMPTS="${PIN_SYNC_ATTEMPTS:-3}"
 
 case "$ENV_RAW" in
   dig) ENV=dev ;;
@@ -83,8 +84,26 @@ sleep 5
 
 echo "Sync second: Contabo Argo refresh+sync ${APP} (no Application PUT/roll)"
 argo_select_env "$ENV"
-# Soften CF 504: sync is a short POST; still retry via argo_api. Do not do long PUT roll.
-export WAIT_HEALTH_SECONDS="${WAIT_HEALTH_SECONDS:-300}"
+# Short per-attempt wait; outer retries cover pin lag / webhook delay.
+# Never call argo-roll / long Application PUT through Cloudflare (HTTP 504).
+export WAIT_HEALTH_SECONDS="${WAIT_HEALTH_SECONDS:-180}"
 export STRICT_IMAGE_TAG=1
-argo_sync_and_wait_healthy "$APP" "$TAG"
+SYNC_OK=""
+for attempt in $(seq 1 "$SYNC_ATTEMPTS"); do
+  echo "Sync attempt ${attempt}/${SYNC_ATTEMPTS} for ${APP} tag=${TAG}"
+  if argo_sync_and_wait_healthy "$APP" "$TAG"; then
+    SYNC_OK=1
+    break
+  fi
+  if (( attempt < SYNC_ATTEMPTS )); then
+    echo "::warning::${APP} sync wait failed (attempt ${attempt}/${SYNC_ATTEMPTS}) — retry short sync (no Application PUT/roll)"
+    sleep 15
+  fi
+done
+
+if [[ -z "$SYNC_OK" ]]; then
+  echo "::error::${APP} pin-then-sync failed after ${SYNC_ATTEMPTS} sync attempts — tag=${TAG}"
+  echo "::notice::If Healthy but tag lag persists, check gitops pin image.repository matches nested GHCR path."
+  exit 1
+fi
 echo "::notice::OK ${APP} pin-then-sync tag=${TAG}"

@@ -67,7 +67,8 @@ argo_api() {
     fi
     # Contabo Argo → Kind am-dev-apps via kubeapi-dev sometimes EOFs / returns empty discovery briefly.
     # Also: Contabo Kind CoreDNS → Docker DNS (172.18.0.1) can SERVFAIL ("server misbehaving") for kubeapi-*.asrax.in.
-    if [[ "$http" == "500" ]] && echo "$resp" | grep -qiE 'EOF|failed to get server version|getting k8s server version|connection reset|discover server resources|zero resources returned|server misbehaving|lookup kubeapi|no such host|i/o timeout'; then
+    # context deadline exceeded / rate limiter Wait = cluster unreachable (tunnel down / local Kind off).
+    if [[ "$http" == "500" ]] && echo "$resp" | grep -qiE 'EOF|failed to get server version|getting k8s server version|connection reset|discover server resources|zero resources returned|server misbehaving|lookup kubeapi|no such host|i/o timeout|context deadline exceeded|rate limiter Wait'; then
       sleep_s=$(( attempt < 4 ? attempt * 8 : 45 ))
       echo "::warning::Argo API ${method} ${path} HTTP 500 (Kind API transient) — retry ${attempt}/${max} in ${sleep_s}s" >&2
       sleep "$sleep_s"

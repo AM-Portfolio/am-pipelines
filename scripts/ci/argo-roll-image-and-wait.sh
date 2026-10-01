@@ -153,7 +153,10 @@ PY
 PATCHED="$(echo "$BUILT" | python3 -c 'import json,sys; json.dump(json.load(sys.stdin)["app"], sys.stdout)')"
 SYNC_BODY="$(echo "$BUILT" | python3 -c 'import json,sys; json.dump(json.load(sys.stdin)["sync"], sys.stdout)')"
 
-argo_api PUT "/api/v1/applications/${APP}" "$PATCHED" >/dev/null
+# validate=false skips the live cluster GET /version check on PUT.
+# Without this, Argo blocks ~32s per attempt when kubeapi-dev.asrax.in is unreachable
+# (local Kind down / tunnel restarting), which causes CF 504 → 12 retries × 90s → 20min timeout.
+argo_api PUT "/api/v1/applications/${APP}?validate=false" "$PATCHED" >/dev/null
 echo "OK: set helm parameters global.image.tag=${TAG} on ${APP} (no git commit)"
 
 # Confirm param survived immediate AppSet reconcile (best-effort)
@@ -174,7 +177,7 @@ PY
 )"
 if [[ "$PARAM_NOW" != "$TAG" ]]; then
   echo "::warning::helm.parameters wiped after PUT (got=${PARAM_NOW:-empty}) — sync will still pass sources override with tag=${TAG}"
-  argo_api PUT "/api/v1/applications/${APP}" "$PATCHED" >/dev/null || true
+  argo_api PUT "/api/v1/applications/${APP}?validate=false" "$PATCHED" >/dev/null || true
 else
   echo "OK: helm.parameters still present global.image.tag=${PARAM_NOW}"
 fi

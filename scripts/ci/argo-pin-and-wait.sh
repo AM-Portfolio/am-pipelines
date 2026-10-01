@@ -2,6 +2,12 @@
 # Pin flex env (dev/preprod) via am-gitops set-image-tag, then Contabo Argo
 # refresh+sync and wait until Healthy/Synced (fail otherwise).
 #
+# Pin file on am-gitops main is SoT (not sibling set-image-tag run status).
+# Always Argo API sync (SKIP_REFRESH_SYNC default 0) — bot pin pushes often skip
+# argo-sync-on-tags. If wait hangs with pin already landed: Contabo cannot reach
+# Kind — Argo cluster am-dev-apps Failed / kubeapi-dev 502. Heal dig cloudflared
+# + ensure-kubeapi-dev.ps1 (am-infra-automation docs/kind-fleet-clusters/KUBEAPI_PROXY.md).
+#
 # Env:
 #   INPUT_SERVICE_NAME  e.g. am-api-gateway
 #   INPUT_ENVIRONMENT   dev|preprod

@@ -400,9 +400,11 @@ jobs:
           severity: "CRITICAL,HIGH"
           exit-code: "0" # Non-blocking (reports but continues)
 
-  # Auto sync Contabo preprod ?????? main push or manual dispatch on main; no am-gitops commit
+  # Auto sync Contabo preprod — main push or workflow_dispatch on main.
+  # Must pin then sync (same as Contabo Approve) so nested image.repository lands.
+  # Regression: notification #67 skipped deploy when if: omitted workflow_dispatch.
   auto-sync-preprod:
-    name: Auto sync ?????? preprod (no gitops commit)
+    name: Auto sync → preprod (pin then sync)
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
     if: |
       always() &&
@@ -442,8 +444,9 @@ jobs:
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
-      - name: Contabo sync + wait (no pin write)
+      - name: Contabo pin then sync (preprod)
         env:
+          GH_TOKEN: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN || github.token }}
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
           INPUT_SERVICE_NAME: ${{ inputs.image_name }}
@@ -451,14 +454,15 @@ jobs:
           INPUT_IMAGE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
-          echo "::notice::Auto sync Contabo preprod no am-gitops commit (main only)."
+          echo "::notice::Auto sync Contabo preprod: pin then sync (main only)."
           chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh
-          chmod +x am-pipelines-repo/scripts/ci/argo-sync-and-wait.sh
-          am-pipelines-repo/scripts/ci/argo-sync-and-wait.sh
+          chmod +x am-pipelines-repo/scripts/ci/argo-pin-then-sync.sh
+          am-pipelines-repo/scripts/ci/argo-pin-then-sync.sh
 
   contabo-approve:
-    name: Contabo Argo ?????? ${{ matrix.env }} (approve)
+    name: Contabo Argo → ${{ matrix.env }} (approve)
     # Removed auto-sync-preprod from needs so it runs in parallel
+    # Regression guard (notification #67): workflow_dispatch on main MUST enable Approve.
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
     if: |
       always() &&

@@ -413,13 +413,14 @@ jobs:
     permissions:
       contents: read
     steps:
+      # Public am-pipelines: github.token only (stale AM_GITHUB_PAT breaks checkout).
       - name: Checkout am-pipelines scripts
         uses: actions/checkout@v4
         with:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
           ref: ${{ inputs.pipelines_ref }}
-          token: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || github.token }}
+          token: ${{ github.token }}
 
       - name: Resolve image tag
         id: tag
@@ -477,13 +478,16 @@ jobs:
     permissions:
       contents: read
     steps:
+      # am-pipelines is public: use github.token only. A stale AM_GITHUB_PAT
+      # (truthy but invalid) overrides || github.token and breaks checkout on
+      # public callers (e.g. am-portfolio) with "terminal prompts disabled".
       - name: Checkout am-pipelines scripts
         uses: actions/checkout@v4
         with:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
           ref: ${{ inputs.pipelines_ref }}
-          token: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || github.token }}
+          token: ${{ github.token }}
 
       - name: Resolve image tag
         id: tag

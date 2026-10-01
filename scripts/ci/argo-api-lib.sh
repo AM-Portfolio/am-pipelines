@@ -46,7 +46,7 @@ argo_api() {
   local resp http sleep_s
 
   while true; do
-    local args=(-sS --connect-timeout 30 --max-time 300 -w "\n%{http_code}" -X "$method" -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" -H "Content-Type: application/json" -H "User-Agent: am-pipelines-ci")
+    local args=(-sS --connect-timeout 15 --max-time 45 -w "\n%{http_code}" -X "$method" -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" -H "Content-Type: application/json" -H "User-Agent: am-pipelines-ci")
     if [[ -n "$body" ]]; then
       args+=(-d "$body")
     fi
@@ -131,6 +131,50 @@ argo_sync() {
   return 1
 }
 
+argo_print_diagnostics() {
+  local app="$1"
+  local raw
+  raw="$(argo_api GET "/api/v1/applications/${app}" || true)"
+  [[ -z "$raw" ]] && return 0
+
+  python3 -c '
+import json, sys, os
+d = json.load(sys.stdin)
+st = d.get("status") or {}
+op = st.get("operationState") or {}
+msg = op.get("message") or ""
+conds = [f"{c.get(\"type\")}: {c.get(\"message\")}" for c in (st.get("conditions") or [])]
+resource_errors = []
+for r in (st.get("resources") or []):
+    rh = ((r.get("health") or {}).get("status") or "")
+    rm = ((r.get("health") or {}).get("message") or "")
+    if rh in ("Degraded", "Missing") or rm:
+        k = r.get("kind") or ""
+        n = r.get("name") or ""
+        resource_errors.append(f"  - {k}/{n} [{rh}]: {rm}")
+
+diag = []
+diag.append(f"### ❌ Diagnostic Failure Summary for {d.get(\"metadata\", {}).get(\"name\", \"app\")}")
+if msg:
+    diag.append(f"**Operation Message**: `{msg}`")
+if conds:
+    diag.append("**Conditions**: " + "; ".join(conds))
+if resource_errors:
+    diag.append("**Failed Resources**:\n" + "\n".join(resource_errors))
+
+out_text = "\n".join(diag)
+print(out_text, file=sys.stderr)
+
+summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
+if summary_file:
+    try:
+        with open(summary_file, "a", encoding="utf-8") as f:
+            f.write("\n" + out_text + "\n")
+    except Exception:
+        pass
+' <<<"$raw" || true
+}
+
 # Refresh+sync then poll until Healthy. Optional EXPECT_TAG substring in live images.
 # Env: WAIT_HEALTH_SECONDS (default 600 — rollouts often need >5m for probes)
 #      STRICT_IMAGE_TAG=1 — require expect_tag evidence before success:
@@ -203,6 +247,7 @@ print(health, sync, ",".join(imgs), param_tag)
 
     if [[ "$health" == "Missing" ]]; then
       echo "::error::${app} health=Missing sync=${sync} — deploy failed"
+      argo_print_diagnostics "$app"
       return 1
     fi
 
@@ -266,5 +311,6 @@ print(health, sync, ",".join(imgs), param_tag)
   else
     echo "::error::${app} wait-healthy timeout after ${wait_health}s — last health=${last_health} sync=${last_sync} images=${last_images}"
   fi
+  argo_print_diagnostics "$app"
   return 1
 }

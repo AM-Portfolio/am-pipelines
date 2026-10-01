@@ -73,6 +73,7 @@ if [[ -z "$PIN_OK" ]]; then
   exit 1
 fi
 
-# Give argo-sync-on-tags a moment, then force Contabo sync (authoritative)
-sleep 8
+# Webhook auto-syncs on pin push; default to fast status polling (skip REST sync call)
+export SKIP_REFRESH_SYNC="${SKIP_REFRESH_SYNC:-1}"
+sleep 5
 argo_sync_and_wait_healthy "$APP" "$TAG"

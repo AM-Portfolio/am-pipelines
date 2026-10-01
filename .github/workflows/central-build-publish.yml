@@ -783,7 +783,7 @@ jobs:
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
-      - name: Contabo Argo roll + wait (dev / preprod)
+      - name: Contabo pin then sync (dev / preprod)
         if: matrix.env == 'dev' || matrix.env == 'preprod'
         env:
           GH_TOKEN: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN || github.token }}
@@ -795,16 +795,10 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh
-          chmod +x am-pipelines-repo/scripts/ci/argo-roll-image-and-wait.sh
-          # Critical path: set helm global.image.tag + sync (pin valueFile alone is overridden by stale params).
-          am-pipelines-repo/scripts/ci/argo-roll-image-and-wait.sh
-          # Async SoT pin — do not wait (serialized set-image-tag queue).
-          if gh workflow run set-image-tag.yml -R AM-Portfolio/am-gitops \
-            -f service="${INPUT_SERVICE_NAME}" -f env="${INPUT_ENVIRONMENT}" -f tag="${INPUT_IMAGE_TAG}"; then
-            echo "::notice::Dispatched set-image-tag (fire-and-forget) service=${INPUT_SERVICE_NAME} env=${INPUT_ENVIRONMENT} tag=${INPUT_IMAGE_TAG}"
-          else
-            echo "::warning::set-image-tag dispatch failed (roll already Healthy; pin SoT may lag)"
-          fi
+          chmod +x am-pipelines-repo/scripts/ci/argo-pin-then-sync.sh
+          # Roll (pin) first via set-image-tag — Argo git webhook / valueFiles SoT.
+          # Sync second — avoid long Application PUT through Cloudflare (HTTP 504).
+          am-pipelines-repo/scripts/ci/argo-pin-then-sync.sh
 
       - name: Contabo promote + wait (prod / dr)
         if: matrix.env == 'prod' || matrix.env == 'dr'

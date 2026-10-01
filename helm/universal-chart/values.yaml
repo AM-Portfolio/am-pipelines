@@ -17,6 +17,8 @@ global:
     csi:
       enabled: true
     secrets: {}
+    csi:
+      enabled: false
 
 environment: default
 replicaCount: 1

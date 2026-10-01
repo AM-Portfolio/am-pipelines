@@ -1,7 +1,7 @@
 name: Central Build & Publish (Contabo gateways)
 
 # Slim reusable for am-gateways: no Feature GHCR notice, no GitOps pin, no Contabo-central.
-# Graph: Secrets+IaC â†’ Build â†’ Vuln â†’ Auto sync (main only) + Contabo Approve matrix.
+# Graph: Secrets+IaC ├óΓÇáΓÇÖ Build ├óΓÇáΓÇÖ Vuln ├óΓÇáΓÇÖ Auto sync (main only) + Contabo Approve matrix.
 
 on:
   workflow_call:
@@ -102,7 +102,7 @@ jobs:
           extra_args: --only-verified
 
   # ============================================================
-  # MISCONFIG SCAN (IaC) â€” GitHub-hosted runner
+  # MISCONFIG SCAN (IaC) ├óΓé¼ΓÇ¥ GitHub-hosted runner
   # Scans Helm charts and Terraform for security misconfigurations
   # ============================================================
 
@@ -129,7 +129,7 @@ jobs:
           log_level: ERROR
 
   # ============================================================
-  # BUILD â€” GitHub-hosted runner
+  # BUILD ├óΓé¼ΓÇ¥ GitHub-hosted runner
   # Compiles, tests, builds and pushes Docker image to GHCR
   # ============================================================
 
@@ -156,7 +156,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ── Java ──────────────────────────────────────────────
+      # ΓöÇΓöÇ Java ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
       - name: Set up JDK
         if: ${{ inputs.language == 'java' }}
         uses: actions/setup-java@v4
@@ -225,7 +225,7 @@ jobs:
             mvn -B -f "${{ github.workspace }}/${MODULE}/pom.xml" test || echo "Test step failed or skipped"
           fi
 
-      # ── Python ────────────────────────────────────────────
+      # ΓöÇΓöÇ Python ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
       - name: Set up Python
         if: ${{ inputs.language == 'python' }}
         uses: actions/setup-python@v5
@@ -246,7 +246,7 @@ jobs:
           flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
           pytest || echo "Tests failed or not found - marking as skipped for now"
 
-      # ── Node.js / React ───────────────────────────────────
+      # ΓöÇΓöÇ Node.js / React ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
       - name: Set up Node.js
         if: ${{ inputs.language == 'node' || inputs.language == 'react' }}
         uses: actions/setup-node@v4
@@ -267,18 +267,18 @@ jobs:
         if: ${{ inputs.language == 'node' || inputs.language == 'react' }}
         run: npm test --if-present
 
-      # ── Docker ────────────────────────────────────────────
+      # ΓöÇΓöÇ Docker ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
       - name: Log in to GitHub Container Registry
         if: ${{ inputs.image_name != '' }}
         uses: docker/login-action@v3
         with:
           registry: ${{ inputs.registry }}
           username: ${{ github.actor }}
-          # Use job github.token (packages:write). Do not prefer org GHCR_TOKEN — a dead PAT
+          # Use job github.token (packages:write). Do not prefer org GHCR_TOKEN ΓÇö a dead PAT
           # blocks login (|| does not fall through). Cross-repo pulls need package Actions access.
           password: ${{ github.token }}
 
-      # Existing org packages often lack "Actions access" for this repo → push write_package.
+      # Existing org packages often lack "Actions access" for this repo ΓåÆ push write_package.
       # Default push path is repo-scoped: <git-repo>/<image_name> (github.token can write).
       - name: Ensure GHCR package linked to this repository
         if: ${{ inputs.image_name != '' }}
@@ -394,9 +394,9 @@ jobs:
           severity: "CRITICAL,HIGH"
           exit-code: "0" # Non-blocking (reports but continues)
 
-  # Auto sync Contabo preprod — main push or manual dispatch on main; no am-gitops commit
+  # Auto sync Contabo preprod ΓÇö main push or manual dispatch on main; no am-gitops commit
   auto-sync-preprod:
-    name: Auto sync → preprod (no gitops commit)
+    name: Auto sync ΓåÆ preprod (no gitops commit)
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
     if: |
       always() &&
@@ -413,13 +413,15 @@ jobs:
     permissions:
       contents: read
     steps:
+      # Public am-pipelines: github.token only (stale AM_GITHUB_PAT breaks checkout).
       - name: Checkout am-pipelines scripts
         uses: actions/checkout@v4
         with:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
           ref: ${{ inputs.pipelines_ref }}
-          token: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN || github.token }}
+          # Public am-pipelines: prefer github.token so a stale AM_GITHUB_PAT cannot break checkout.
+          token: ${{ github.token }}
 
       - name: Resolve image tag
         id: tag
@@ -449,7 +451,7 @@ jobs:
           am-pipelines-repo/scripts/ci/argo-sync-and-wait.sh
 
   contabo-approve:
-    name: Contabo Argo → ${{ matrix.env }} (approve)
+    name: Contabo Argo ΓåÆ ${{ matrix.env }} (approve)
     # Removed auto-sync-preprod from needs so it runs in parallel
     needs: [build, vulnerability-scan, misconfig-scan, security-scan]
     if: |
@@ -477,13 +479,17 @@ jobs:
     permissions:
       contents: read
     steps:
+      # am-pipelines is public: use github.token only. A stale AM_GITHUB_PAT
+      # (truthy but invalid) overrides || github.token and breaks checkout on
+      # public callers (e.g. am-portfolio) with "terminal prompts disabled".
       - name: Checkout am-pipelines scripts
         uses: actions/checkout@v4
         with:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
           ref: ${{ inputs.pipelines_ref }}
-          token: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN || github.token }}
+          # Public am-pipelines: prefer github.token so a stale AM_GITHUB_PAT cannot break checkout.
+          token: ${{ github.token }}
 
       - name: Resolve image tag
         id: tag
@@ -513,7 +519,7 @@ jobs:
           chmod +x am-pipelines-repo/scripts/ci/argo-roll-image-and-wait.sh
           # Critical path: set helm global.image.tag + sync (pin valueFile alone is overridden by stale params).
           am-pipelines-repo/scripts/ci/argo-roll-image-and-wait.sh
-          # Async SoT pin — do not wait (serialized set-image-tag queue).
+          # Async SoT pin ΓÇö do not wait (serialized set-image-tag queue).
           if gh workflow run set-image-tag.yml -R AM-Portfolio/am-gitops \
             -f service="${INPUT_SERVICE_NAME}" -f env="${INPUT_ENVIRONMENT}" -f tag="${INPUT_IMAGE_TAG}"; then
             echo "::notice::Dispatched set-image-tag (fire-and-forget) service=${INPUT_SERVICE_NAME} env=${INPUT_ENVIRONMENT} tag=${INPUT_IMAGE_TAG}"

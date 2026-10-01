@@ -16,7 +16,8 @@ param(
   [string]$GitopsDir = "",
   [string]$ArgocdEnvFile = "",
   [string]$Org = "AM-Portfolio",
-  [switch]$AlsoOrg,
+  [switch]$AlsoOrg = $true,
+  [switch]$SkipOrg,
   [ValidateSet("all", "private", "selected")]
   [string]$OrgVisibility = "private",
   [switch]$SkipGithubPat,
@@ -118,7 +119,7 @@ $repos = Get-EnrolledRepos $gitops
 Write-Host "Enrolled repos: $($repos.Count)  gitops=$gitops"
 Write-Host "Argo token account=$($argo['ARGOCD_TOKEN_ACCOUNT']) expires=$($argo['ARGOCD_TOKEN_EXPIRES_APPROX'])"
 
-if ($AlsoOrg) {
+if ($AlsoOrg -and -not $SkipOrg) {
   try {
     Set-OrgSecret "ARGOCD_AUTH_TOKEN" $token
     Set-OrgSecret "ARGOCD_SERVER" $server

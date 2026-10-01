@@ -245,7 +245,7 @@ fi
 # Sync with sources override (retries for in-progress / Kind API EOF)
 errf="$(mktemp)"
 attempt=1
-max=15
+max=3
 while (( attempt <= max )); do
   if argo_api POST "/api/v1/applications/${APP}/sync" "$SYNC_BODY" >/dev/null 2>"$errf"; then
     echo "OK: sync ${APP} with helm global.image.tag=${TAG}"

@@ -40,10 +40,12 @@ argo_api() {
   local method="$1" path="$2" body="${3:-}"
   argo_require_token
   local url="${ARGOCD_SERVER}${path}"
-  # Contabo sits behind Cloudflare — 502/503/504/429 are retryable (origin overload).
-  local attempt=1 max="${ARGO_API_RETRIES:-8}"
+  local attempt=1
+  local max_5xx="${ARGO_API_MAX_5XX_RETRIES:-3}"
+  local max_4xx="${ARGO_API_MAX_4XX_RETRIES:-2}"
   local resp http sleep_s
-  while (( attempt <= max )); do
+
+  while true; do
     local args=(-sS -w "\n%{http_code}" -X "$method" -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" -H "Content-Type: application/json" -H "User-Agent: am-pipelines-ci")
     if [[ -n "$body" ]]; then
       args+=(-d "$body")
@@ -55,28 +57,41 @@ argo_api() {
       printf '%s' "$resp"
       return 0
     fi
-    # Contabo sits behind Cloudflare — 502/503/504/429/520–524 are retryable (origin overload / CF edge).
-    if [[ "$http" == "502" || "$http" == "503" || "$http" == "504" || "$http" == "429" || "$http" == "520" || "$http" == "521" || "$http" == "522" || "$http" == "523" || "$http" == "524" ]]; then
-      # Cloudflare retry_after often ~60s on 502; backoff grows but caps at 60
-      sleep_s=$(( attempt < 4 ? attempt * 5 : 60 ))
-      echo "::warning::Argo API ${method} ${path} HTTP ${http} (transient) — retry ${attempt}/${max} in ${sleep_s}s" >&2
+
+    # 4XX Client/Auth/Permission errors (401, 403, 404, etc.) -> max 2 attempts
+    if [[ "$http" == 4* ]]; then
+      if (( attempt >= max_4xx )); then
+        echo "::error::Argo API ${method} ${path} HTTP ${http} (client/auth error, attempt ${attempt}/${max_4xx}): ${resp}" >&2
+        return 1
+      fi
+      sleep_s=$(( attempt * 3 ))
+      echo "::warning::Argo API ${method} ${path} HTTP ${http} (client error) — retry ${attempt}/${max_4xx} in ${sleep_s}s" >&2
       sleep "$sleep_s"
       attempt=$((attempt + 1))
       continue
     fi
-    # Contabo Argo → Kind am-vps-nonprod (:6443) sometimes EOFs briefly; Application PUT/sync returns 500.
-    if [[ "$http" == "500" ]] && echo "$resp" | grep -qiE 'EOF|failed to get server version|getting k8s server version|connection reset'; then
-      sleep_s=$(( attempt < 4 ? attempt * 8 : 45 ))
-      echo "::warning::Argo API ${method} ${path} HTTP 500 (Kind API transient) — retry ${attempt}/${max} in ${sleep_s}s" >&2
+
+    # 5XX Server/Gateway/Cloudflare errors (500, 502, 503, 504, 520-524) -> max 3 attempts
+    if [[ "$http" == 5* ]]; then
+      if (( attempt >= max_5xx )); then
+        echo "::error::Argo API ${method} ${path} HTTP ${http} (server error, attempt ${attempt}/${max_5xx}): ${resp}" >&2
+        return 1
+      fi
+      sleep_s=$(( attempt * 4 ))
+      echo "::warning::Argo API ${method} ${path} HTTP ${http} (server error) — retry ${attempt}/${max_5xx} in ${sleep_s}s" >&2
       sleep "$sleep_s"
       attempt=$((attempt + 1))
       continue
     fi
-    echo "::error::Argo API ${method} ${path} HTTP ${http}: ${resp}" >&2
-    return 1
+
+    # Fallback for non-HTTP curl network errors
+    if (( attempt >= max_5xx )); then
+      echo "::error::Argo API ${method} ${path} failed HTTP ${http} after ${attempt} attempts: ${resp}" >&2
+      return 1
+    fi
+    sleep 3
+    attempt=$((attempt + 1))
   done
-  echo "::error::Argo API ${method} ${path} still failing after ${max} retries (last HTTP ${http}): ${resp}" >&2
-  return 1
 }
 
 argo_refresh_hard() {
@@ -89,8 +104,8 @@ argo_sync() {
   local app="$1"
   # Contabo requires ApplicationSyncRequest.name (400 without it).
   # Retry when Argo returns code 9 / "another operation is already in progress"
-  # (common after Application PUT + hard refresh while auto-sync is running).
-  local attempt=1 max=15 err
+  # Max 3 retries (fail fast if operation stays blocked).
+  local attempt=1 max=3 err
   local errf
   errf="$(mktemp)"
   while (( attempt <= max )); do

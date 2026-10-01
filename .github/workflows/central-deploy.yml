@@ -73,7 +73,7 @@ jobs:
       - name: Checkout Application Repo
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN || github.token }}
           ref: ${{ inputs.git_ref || github.ref }}
           fetch-depth: 0
 
@@ -83,7 +83,7 @@ jobs:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
           ref: main
-          token: ${{ secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN || github.token }}
 
       - name: Select cluster kubeconfig
         shell: bash

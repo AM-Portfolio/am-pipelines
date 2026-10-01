@@ -54,7 +54,7 @@ on:
       pipelines_ref:
         required: false
         type: string
-        default: "main"
+        default: "develop"
         description: >-
           Git ref of AM-Portfolio/am-pipelines for Contabo scripts checkout.
           When testing a fix/* branch, set this to the same ref as the workflow
@@ -457,7 +457,7 @@ jobs:
       inputs.image_name != '' &&
       (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch') &&
       needs.build.result == 'success' &&
-      (needs.vulnerability-scan.result == 'success' || needs.vulnerability_scan.result == 'skipped') &&
+      (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
       (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
       (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped') &&
       (
@@ -498,27 +498,28 @@ jobs:
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
-      - name: Argo roll image + wait (dev/preprod → Contabo)
+      - name: Contabo Argo roll + wait (dev/preprod)
         if: matrix.env == 'dev' || matrix.env == 'preprod'
         env:
+          GH_TOKEN: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || github.token }}
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
-          # Optional: force nonprod-dr (local) or nonprod-main (vps). Empty = auto
-          # (dev always am-dev-apps; preprod retargets when am-vps-nonprod â‰  Successful).
-          NONPROD_ORIGIN: ${{ vars.NONPROD_ORIGIN || '' }}
           INPUT_SERVICE_NAME: ${{ inputs.image_name }}
           INPUT_ENVIRONMENT: ${{ matrix.env }}
           INPUT_IMAGE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
-          if [[ -z "${ARGOCD_AUTH_TOKEN:-}" || -z "${ARGOCD_SERVER:-}" ]]; then
-            echo "::error::Missing ARGOCD_AUTH_TOKEN / ARGOCD_SERVER for Contabo Argo (job environment='${{ matrix.env }}'). Prefer org secrets on AM-Portfolio, or run: pwsh am-pipelines/scripts/ci/sync-contabo-ci-secrets.ps1"
-            exit 1
-          fi
           chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh
           chmod +x am-pipelines-repo/scripts/ci/argo-roll-image-and-wait.sh
+          # Critical path: set helm global.image.tag + sync (pin valueFile alone is overridden by stale params).
           am-pipelines-repo/scripts/ci/argo-roll-image-and-wait.sh
-
+          # Async SoT pin — do not wait (serialized set-image-tag queue).
+          if gh workflow run set-image-tag.yml -R AM-Portfolio/am-gitops \
+            -f service="${INPUT_SERVICE_NAME}" -f env="${INPUT_ENVIRONMENT}" -f tag="${INPUT_IMAGE_TAG}"; then
+            echo "::notice::Dispatched set-image-tag (fire-and-forget) service=${INPUT_SERVICE_NAME} env=${INPUT_ENVIRONMENT} tag=${INPUT_IMAGE_TAG}"
+          else
+            echo "::warning::set-image-tag dispatch failed (roll already Healthy; pin SoT may lag)"
+          fi
       - name: Contabo promote + wait (prod / dr)
         if: matrix.env == 'prod' || matrix.env == 'dr'
         env:

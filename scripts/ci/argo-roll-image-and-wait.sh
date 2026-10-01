@@ -116,14 +116,33 @@ if idx < 0:
     print("ERROR: no helm/universal-chart source on Application", file=sys.stderr)
     sys.exit(1)
 
+drop = {"global.image.tag", "global.image.digest", "image.repository"}
+# Strip image overrides from every source (AppSet sometimes leaves stale
+# helm.parameters on values/imageValues refs; those confuse STRICT wait logs).
+cleaned = []
+for i, s in enumerate(sources):
+    s = dict(s or {})
+    if "helm" in s and isinstance(s.get("helm"), dict):
+        helm_i = dict(s["helm"])
+        params_i = [
+            p
+            for p in list(helm_i.get("parameters") or [])
+            if (p.get("name") or "") not in drop
+        ]
+        if params_i:
+            helm_i["parameters"] = params_i
+        else:
+            helm_i.pop("parameters", None)
+        if helm_i:
+            s["helm"] = helm_i
+        else:
+            s.pop("helm", None)
+    cleaned.append(s)
+sources = cleaned
+
 src = dict(sources[idx])
 helm = dict(src.get("helm") or {})
-drop = {"global.image.tag", "global.image.digest", "image.repository"}
-params = [
-    p
-    for p in list(helm.get("parameters") or [])
-    if (p.get("name") or "") not in drop
-]
+params = list(helm.get("parameters") or [])
 params.append({"name": "global.image.tag", "value": tag})
 # Contabo CI pushes repo-scoped GHCR path ghcr.io/<owner>/<git-repo>/<image>
 # for bare image_name (see central-build-publish-contabo). Flat am-ai-gateway 403s.
@@ -182,7 +201,7 @@ fi
 # Sync with sources override (retries for in-progress / Kind API EOF)
 errf="$(mktemp)"
 attempt=1
-max=15
+max=3
 while (( attempt <= max )); do
   if argo_api POST "/api/v1/applications/${APP}/sync" "$SYNC_BODY" >/dev/null 2>"$errf"; then
     echo "OK: sync ${APP} with helm global.image.tag=${TAG}"

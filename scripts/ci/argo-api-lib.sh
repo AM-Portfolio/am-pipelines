@@ -40,11 +40,13 @@ argo_api() {
   local method="$1" path="$2" body="${3:-}"
   argo_require_token
   local url="${ARGOCD_SERVER}${path}"
-  # Contabo sits behind Cloudflare — 502/503/504/429 are retryable (origin overload).
-  local attempt=1 max="${ARGO_API_RETRIES:-12}"
+  local attempt=1
+  local max_5xx="${ARGO_API_MAX_5XX_RETRIES:-3}"
+  local max_4xx="${ARGO_API_MAX_4XX_RETRIES:-2}"
   local resp http sleep_s
-  while (( attempt <= max )); do
-    local args=(-sS --connect-timeout 30 --max-time 300 -w "\n%{http_code}" -X "$method" -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" -H "Content-Type: application/json" -H "User-Agent: am-pipelines-ci")
+
+  while true; do
+    local args=(-sS --connect-timeout 15 --max-time 45 -w "\n%{http_code}" -X "$method" -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" -H "Content-Type: application/json" -H "User-Agent: am-pipelines-ci")
     if [[ -n "$body" ]]; then
       args+=(-d "$body")
     fi
@@ -55,46 +57,41 @@ argo_api() {
       printf '%s' "$resp"
       return 0
     fi
-    # Contabo sits behind Cloudflare — 502/503/504/429/520–524 are retryable (origin overload / CF edge).
-    # Also retry curl transport failures (empty http / 000) when CF/Argo is slow.
-    if [[ -z "$http" || "$http" == "000" || "$http" == "502" || "$http" == "503" || "$http" == "504" || "$http" == "429" || "$http" == "520" || "$http" == "521" || "$http" == "522" || "$http" == "523" || "$http" == "524" ]]; then
-      # Cloudflare retry_after often ~60s on 502; backoff grows but caps at 90
-      sleep_s=$(( attempt < 4 ? attempt * 5 : 90 ))
-      echo "::warning::Argo API ${method} ${path} HTTP ${http:-000} (transient) — retry ${attempt}/${max} in ${sleep_s}s" >&2
+
+    # 4XX Client/Auth/Permission errors (401, 403, 404, 400, 429 etc.) -> max 2 attempts
+    if [[ "$http" == 4* ]]; then
+      if (( attempt >= max_4xx )); then
+        echo "::error::Argo API ${method} ${path} HTTP ${http} (client/auth error, attempt ${attempt}/${max_4xx}): ${resp}" >&2
+        return 1
+      fi
+      sleep_s=$(( attempt * 3 ))
+      echo "::warning::Argo API ${method} ${path} HTTP ${http} (client error) — retry ${attempt}/${max_4xx} in ${sleep_s}s" >&2
       sleep "$sleep_s"
       attempt=$((attempt + 1))
       continue
     fi
-    # Contabo Argo → Kind am-dev-apps via kubeapi-dev sometimes EOFs / returns empty discovery briefly.
-    # Also: Contabo Kind CoreDNS → Docker DNS (172.18.0.1) can SERVFAIL ("server misbehaving") for kubeapi-*.asrax.in.
-    if [[ "$http" == "500" ]] && echo "$resp" | grep -qiE 'EOF|failed to get server version|getting k8s server version|connection reset|discover server resources|zero resources returned|server misbehaving|lookup kubeapi|no such host|i/o timeout'; then
-      sleep_s=$(( attempt < 4 ? attempt * 8 : 45 ))
-      echo "::warning::Argo API ${method} ${path} HTTP 500 (Kind API transient) — retry ${attempt}/${max} in ${sleep_s}s" >&2
+
+    # 5XX Server/Gateway/Cloudflare errors (500, 502, 503, 504, 520-524) -> max 3 attempts
+    if [[ "$http" == 5* || -z "$http" || "$http" == "000" ]]; then
+      if (( attempt >= max_5xx )); then
+        echo "::error::Argo API ${method} ${path} HTTP ${http:-000} (server error, attempt ${attempt}/${max_5xx}): ${resp}" >&2
+        return 1
+      fi
+      sleep_s=$(( attempt * 4 ))
+      echo "::warning::Argo API ${method} ${path} HTTP ${http:-000} (server error) — retry ${attempt}/${max_5xx} in ${sleep_s}s" >&2
       sleep "$sleep_s"
       attempt=$((attempt + 1))
       continue
     fi
-    # Contabo may surface broken Kind discovery as 403 (not only 500) while tunnel/proxy heals.
-    if [[ "$http" == "403" ]] && echo "$resp" | grep -qiE 'discover server resources|zero resources returned|failed to get server version|getting k8s server version|server misbehaving|lookup kubeapi'; then
-      sleep_s=$(( attempt < 4 ? attempt * 8 : 45 ))
-      echo "::warning::Argo API ${method} ${path} HTTP 403 (Kind API discover transient) — retry ${attempt}/${max} in ${sleep_s}s" >&2
-      sleep "$sleep_s"
-      attempt=$((attempt + 1))
-      continue
+
+    # Fallback for non-HTTP curl network errors
+    if (( attempt >= max_5xx )); then
+      echo "::error::Argo API ${method} ${path} failed HTTP ${http} after ${attempt} attempts: ${resp}" >&2
+      return 1
     fi
-    # Contabo argocd-repo-server flaps (SVC 10.96.x:8081 connection refused) → Application PUT 400 InvalidSpec.
-    if [[ "$http" == "400" ]] && echo "$resp" | grep -qiE 'repo client error|connection refused|repository not accessible|Unavailable'; then
-      sleep_s=$(( attempt < 4 ? attempt * 8 : 45 ))
-      echo "::warning::Argo API ${method} ${path} HTTP 400 (repo-server transient) — retry ${attempt}/${max} in ${sleep_s}s" >&2
-      sleep "$sleep_s"
-      attempt=$((attempt + 1))
-      continue
-    fi
-    echo "::error::Argo API ${method} ${path} HTTP ${http}: ${resp}" >&2
-    return 1
+    sleep 3
+    attempt=$((attempt + 1))
   done
-  echo "::error::Argo API ${method} ${path} still failing after ${max} retries (last HTTP ${http}): ${resp}" >&2
-  return 1
 }
 
 argo_refresh_hard() {
@@ -107,8 +104,8 @@ argo_sync() {
   local app="$1"
   # Contabo requires ApplicationSyncRequest.name (400 without it).
   # Retry when Argo returns code 9 / "another operation is already in progress"
-  # (common after Application PUT + hard refresh while auto-sync is running).
-  local attempt=1 max=15 err
+  # Max 3 retries (fail fast if operation stays blocked).
+  local attempt=1 max=3 err
   local errf
   errf="$(mktemp)"
   while (( attempt <= max )); do
@@ -134,20 +131,68 @@ argo_sync() {
   return 1
 }
 
+argo_print_diagnostics() {
+  local app="$1"
+  local raw
+  raw="$(argo_api GET "/api/v1/applications/${app}" || true)"
+  [[ -z "$raw" ]] && return 0
+
+  python3 -c '
+import json, sys, os
+d = json.load(sys.stdin)
+st = d.get("status") or {}
+op = st.get("operationState") or {}
+msg = op.get("message") or ""
+conds = [f"{c.get(\"type\")}: {c.get(\"message\")}" for c in (st.get("conditions") or [])]
+resource_errors = []
+for r in (st.get("resources") or []):
+    rh = ((r.get("health") or {}).get("status") or "")
+    rm = ((r.get("health") or {}).get("message") or "")
+    if rh in ("Degraded", "Missing") or rm:
+        k = r.get("kind") or ""
+        n = r.get("name") or ""
+        resource_errors.append(f"  - {k}/{n} [{rh}]: {rm}")
+
+diag = []
+diag.append(f"### ❌ Diagnostic Failure Summary for {d.get(\"metadata\", {}).get(\"name\", \"app\")}")
+if msg:
+    diag.append(f"**Operation Message**: `{msg}`")
+if conds:
+    diag.append("**Conditions**: " + "; ".join(conds))
+if resource_errors:
+    diag.append("**Failed Resources**:\n" + "\n".join(resource_errors))
+
+out_text = "\n".join(diag)
+print(out_text, file=sys.stderr)
+
+summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
+if summary_file:
+    try:
+        with open(summary_file, "a", encoding="utf-8") as f:
+            f.write("\n" + out_text + "\n")
+    except Exception:
+        pass
+' <<<"$raw" || true
+}
+
 # Refresh+sync then poll until Healthy. Optional EXPECT_TAG substring in live images.
 # Env: WAIT_HEALTH_SECONDS (default 600 — rollouts often need >5m for probes)
 #      STRICT_IMAGE_TAG=1 — require expect_tag evidence before success:
 #        - status.summary.images / resource images contain the tag, OR
 #        - Healthy+Synced and helm param global.image.tag matches (Contabo often
 #          leaves summary.images empty even when the roll applied)
+#      STRICT_WRONG_TAG_SECONDS (default 90) — under STRICT, if images/param stay on a
+#        different tag while Progressing/Degraded/Healthy, fail fast (stale helm param).
 # Success = health Healthy (live deploy). Synced is preferred but OutOfSync alone does not fail.
 # Fail immediately on Missing; fail at timeout if not Healthy.
 argo_sync_and_wait_healthy() {
   local app="$1"
   local expect_tag="${2:-}"
   local wait_health="${WAIT_HEALTH_SECONDS:-600}"
+  local wrong_tag_fail_s="${STRICT_WRONG_TAG_SECONDS:-90}"
   local last_health="" last_sync="" last_images="" last_param_tag=""
   local outofsync_retried=0
+  local wrong_tag_since=0
 
   if [[ "${SKIP_REFRESH_SYNC:-0}" != "1" ]]; then
     argo_refresh_hard "$app" || true
@@ -190,8 +235,12 @@ for r in (op.get("resources") or []):
 for im in (op.get("images") or []):
     if im and im not in imgs:
         imgs.append(im)
+# Only helm/universal-chart drives the Deployment image. Ignore stale
+# helm.parameters on values/imageValues refs (AppSet leftovers).
 param_tag = ""
 for src in ((d.get("spec") or {}).get("sources") or []):
+    if (src.get("path") or "") != "helm/universal-chart":
+        continue
     for p in ((src.get("helm") or {}).get("parameters") or []):
         if (p.get("name") or "") == "global.image.tag":
             param_tag = p.get("value") or ""
@@ -206,6 +255,7 @@ print(health, sync, ",".join(imgs), param_tag)
 
     if [[ "$health" == "Missing" ]]; then
       echo "::error::${app} health=Missing sync=${sync} — deploy failed"
+      argo_print_diagnostics "$app"
       return 1
     fi
 
@@ -221,6 +271,29 @@ print(health, sync, ",".join(imgs), param_tag)
     # If images are present but show a different tag, never treat as ok
     if [[ -n "$expect_tag" && -n "$images" && "$images" != *"$expect_tag"* ]]; then
       tag_ok=0
+    fi
+
+    # STRICT fail-fast: stuck on a different tag (stale helm param overriding pin).
+    if [[ "${STRICT_IMAGE_TAG:-0}" == "1" && -n "$expect_tag" && "$tag_ok" != "1" ]]; then
+      local wrong=0
+      if [[ -n "$images" && "$images" != *"$expect_tag"* ]]; then
+        wrong=1
+      elif [[ -n "$param_tag" && "$param_tag" != "$expect_tag" && ( -z "$images" || "$images" != *"$expect_tag"* ) ]]; then
+        wrong=1
+      fi
+      if [[ "$wrong" == "1" && ( "$health" == "Progressing" || "$health" == "Degraded" || "$health" == "Healthy" ) ]]; then
+        if (( wrong_tag_since == 0 )); then
+          wrong_tag_since=$SECONDS
+        elif (( SECONDS - wrong_tag_since >= wrong_tag_fail_s )); then
+          echo "::error::${app} tag=${expect_tag} not evidenced for ${wrong_tag_fail_s}s — stale helm param / wrong image (health=${health} sync=${sync} images=${images} param=${param_tag}). Use argo-roll-image-and-wait to set global.image.tag."
+          argo_print_diagnostics "$app"
+          return 1
+        fi
+      else
+        wrong_tag_since=0
+      fi
+    else
+      wrong_tag_since=0
     fi
 
     if [[ "$health" == "Healthy" ]]; then
@@ -269,5 +342,6 @@ print(health, sync, ",".join(imgs), param_tag)
   else
     echo "::error::${app} wait-healthy timeout after ${wait_health}s — last health=${last_health} sync=${last_sync} images=${last_images}"
   fi
+  argo_print_diagnostics "$app"
   return 1
 }

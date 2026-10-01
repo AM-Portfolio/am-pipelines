@@ -48,8 +48,9 @@ pin_tag() {
 
 CURRENT="$(pin_tag "$ENV")"
 if [[ -n "$CURRENT" && "$CURRENT" == "$TAG" ]]; then
-  echo "Pin already ${ENV}=${TAG} — Contabo sync+wait only"
-  export SKIP_REFRESH_SYNC="${SKIP_REFRESH_SYNC:-1}"
+  echo "Pin already ${ENV}=${TAG} — Contabo refresh+sync+wait"
+  # Bot pin pushes do not always trigger argo-sync-on-tags; Approve must sync via Argo API.
+  export SKIP_REFRESH_SYNC="${SKIP_REFRESH_SYNC:-0}"
   export STRICT_IMAGE_TAG=1
   argo_sync_and_wait_healthy "$APP" "$TAG"
   exit 0
@@ -81,7 +82,8 @@ while (( SECONDS < deadline )); do
     done < <(gh run list -R AM-Portfolio/am-gitops --workflow=set-image-tag.yml --limit 8 \
       --json databaseId,status,conclusion,createdAt \
       --jq '.[] | [.databaseId, .status, (.conclusion // ""), .createdAt] | @tsv' 2>/dev/null || true)
-    export SKIP_REFRESH_SYNC="${SKIP_REFRESH_SYNC:-1}"
+    # Bot pin pushes do not always trigger argo-sync-on-tags; Approve must sync via Argo API.
+    export SKIP_REFRESH_SYNC="${SKIP_REFRESH_SYNC:-0}"
     export STRICT_IMAGE_TAG=1
     sleep 5
     argo_sync_and_wait_healthy "$APP" "$TAG"

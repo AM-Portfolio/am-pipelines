@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # Pin flex env (dev/preprod) via am-gitops set-image-tag, then Contabo Argo
-# refresh+sync and wait until Healthy/Synced (fail otherwise).
+# helm-param roll + wait until Healthy (fail otherwise).
 #
-# Pin file on am-gitops main is SoT (not sibling set-image-tag run status).
-# Always Argo API sync (SKIP_REFRESH_SYNC default 0) — bot pin pushes often skip
-# argo-sync-on-tags. If wait hangs with pin already landed: Contabo cannot reach
-# Kind — Argo cluster am-dev-apps Failed / kubeapi-dev 502. Heal dig cloudflared
-# + ensure-kubeapi-dev.ps1 (am-infra-automation docs/kind-fleet-clusters/KUBEAPI_PROXY.md).
+# Pin file on am-gitops main is SoT for valueFiles, but Contabo Applications often
+# keep a stale helm parameter global.image.tag that overrides the pin. After the
+# pin lands (or is already present), always call argo-roll-image-and-wait so the
+# live Deployment gets the expected tag.
+#
+# If wait hangs with pin already landed: Contabo cannot reach Kind — Argo cluster
+# am-dev-apps Failed / kubeapi-dev 502. Heal dig cloudflared + ensure-kubeapi-dev.ps1
+# (am-infra-automation docs/kind-fleet-clusters/KUBEAPI_PROXY.md).
 #
 # Env:
 #   INPUT_SERVICE_NAME  e.g. am-api-gateway
@@ -28,7 +31,6 @@ SVC="${INPUT_SERVICE_NAME:?}"
 ENV="${INPUT_ENVIRONMENT:?}"
 TAG="${INPUT_IMAGE_TAG:?}"
 WAIT_PIN="${WAIT_PIN_SECONDS:-240}"
-APP="${SVC}-${ENV}"
 
 case "$ENV" in
   dev|preprod) ;;
@@ -52,13 +54,17 @@ pin_tag() {
   echo "$raw" | sed -n 's/.*tag:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
 }
 
+roll_and_wait() {
+  # Stale helm global.image.tag overrides pin valueFiles — roll is required.
+  chmod +x "${SCRIPT_DIR}/argo-roll-image-and-wait.sh"
+  echo "Pin ready ${ENV}=${TAG} — Contabo helm-param roll + wait Healthy"
+  "${SCRIPT_DIR}/argo-roll-image-and-wait.sh"
+}
+
 CURRENT="$(pin_tag "$ENV")"
 if [[ -n "$CURRENT" && "$CURRENT" == "$TAG" ]]; then
-  echo "Pin already ${ENV}=${TAG} — Contabo refresh+sync+wait"
-  # Bot pin pushes do not always trigger argo-sync-on-tags; Approve must sync via Argo API.
-  export SKIP_REFRESH_SYNC="${SKIP_REFRESH_SYNC:-0}"
-  export STRICT_IMAGE_TAG=1
-  argo_sync_and_wait_healthy "$APP" "$TAG"
+  echo "Pin already ${ENV}=${TAG}"
+  roll_and_wait
   exit 0
 fi
 
@@ -88,11 +94,7 @@ while (( SECONDS < deadline )); do
     done < <(gh run list -R AM-Portfolio/am-gitops --workflow=set-image-tag.yml --limit 8 \
       --json databaseId,status,conclusion,createdAt \
       --jq '.[] | [.databaseId, .status, (.conclusion // ""), .createdAt] | @tsv' 2>/dev/null || true)
-    # Bot pin pushes do not always trigger argo-sync-on-tags; Approve must sync via Argo API.
-    export SKIP_REFRESH_SYNC="${SKIP_REFRESH_SYNC:-0}"
-    export STRICT_IMAGE_TAG=1
-    sleep 5
-    argo_sync_and_wait_healthy "$APP" "$TAG"
+    roll_and_wait
     exit 0
   fi
   echo "pin still ${NOW:-none}; waiting..."

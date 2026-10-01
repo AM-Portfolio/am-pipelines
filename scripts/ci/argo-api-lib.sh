@@ -181,14 +181,18 @@ if summary_file:
 #        - status.summary.images / resource images contain the tag, OR
 #        - Healthy+Synced and helm param global.image.tag matches (Contabo often
 #          leaves summary.images empty even when the roll applied)
+#      STRICT_WRONG_TAG_SECONDS (default 90) — under STRICT, if images/param stay on a
+#        different tag while Progressing/Degraded/Healthy, fail fast (stale helm param).
 # Success = health Healthy (live deploy). Synced is preferred but OutOfSync alone does not fail.
 # Fail immediately on Missing; fail at timeout if not Healthy.
 argo_sync_and_wait_healthy() {
   local app="$1"
   local expect_tag="${2:-}"
   local wait_health="${WAIT_HEALTH_SECONDS:-600}"
+  local wrong_tag_fail_s="${STRICT_WRONG_TAG_SECONDS:-90}"
   local last_health="" last_sync="" last_images="" last_param_tag=""
   local outofsync_retried=0
+  local wrong_tag_since=0
 
   if [[ "${SKIP_REFRESH_SYNC:-0}" != "1" ]]; then
     argo_refresh_hard "$app" || true
@@ -263,6 +267,29 @@ print(health, sync, ",".join(imgs), param_tag)
     # If images are present but show a different tag, never treat as ok
     if [[ -n "$expect_tag" && -n "$images" && "$images" != *"$expect_tag"* ]]; then
       tag_ok=0
+    fi
+
+    # STRICT fail-fast: stuck on a different tag (stale helm param overriding pin).
+    if [[ "${STRICT_IMAGE_TAG:-0}" == "1" && -n "$expect_tag" && "$tag_ok" != "1" ]]; then
+      local wrong=0
+      if [[ -n "$images" && "$images" != *"$expect_tag"* ]]; then
+        wrong=1
+      elif [[ -n "$param_tag" && "$param_tag" != "$expect_tag" && ( -z "$images" || "$images" != *"$expect_tag"* ) ]]; then
+        wrong=1
+      fi
+      if [[ "$wrong" == "1" && ( "$health" == "Progressing" || "$health" == "Degraded" || "$health" == "Healthy" ) ]]; then
+        if (( wrong_tag_since == 0 )); then
+          wrong_tag_since=$SECONDS
+        elif (( SECONDS - wrong_tag_since >= wrong_tag_fail_s )); then
+          echo "::error::${app} tag=${expect_tag} not evidenced for ${wrong_tag_fail_s}s — stale helm param / wrong image (health=${health} sync=${sync} images=${images} param=${param_tag}). Use argo-roll-image-and-wait to set global.image.tag."
+          argo_print_diagnostics "$app"
+          return 1
+        fi
+      else
+        wrong_tag_since=0
+      fi
+    else
+      wrong_tag_since=0
     fi
 
     if [[ "$health" == "Healthy" ]]; then

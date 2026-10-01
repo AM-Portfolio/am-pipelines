@@ -419,7 +419,7 @@ jobs:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
           ref: ${{ inputs.pipelines_ref }}
-          token: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || github.token }}
+          token: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN || github.token }}
 
       - name: Resolve image tag
         id: tag
@@ -483,7 +483,7 @@ jobs:
           repository: AM-Portfolio/am-pipelines
           path: am-pipelines-repo
           ref: ${{ inputs.pipelines_ref }}
-          token: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || github.token }}
+          token: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN || github.token }}
 
       - name: Resolve image tag
         id: tag
@@ -501,7 +501,7 @@ jobs:
       - name: Contabo Argo roll + wait (dev/preprod)
         if: matrix.env == 'dev' || matrix.env == 'preprod'
         env:
-          GH_TOKEN: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || github.token }}
+          GH_TOKEN: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN || github.token }}
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
           INPUT_SERVICE_NAME: ${{ inputs.image_name }}
@@ -523,7 +523,7 @@ jobs:
       - name: Contabo promote + wait (prod / dr)
         if: matrix.env == 'prod' || matrix.env == 'dr'
         env:
-          GH_TOKEN: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || github.token }}
+          GH_TOKEN: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN || github.token }}
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
           INPUT_SERVICE_NAME: ${{ inputs.image_name }}

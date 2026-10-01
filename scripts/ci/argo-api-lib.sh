@@ -235,8 +235,12 @@ for r in (op.get("resources") or []):
 for im in (op.get("images") or []):
     if im and im not in imgs:
         imgs.append(im)
+# Only helm/universal-chart drives the Deployment image. Ignore stale
+# helm.parameters on values/imageValues refs (AppSet leftovers).
 param_tag = ""
 for src in ((d.get("spec") or {}).get("sources") or []):
+    if (src.get("path") or "") != "helm/universal-chart":
+        continue
     for p in ((src.get("helm") or {}).get("parameters") or []):
         if (p.get("name") or "") == "global.image.tag":
             param_tag = p.get("value") or ""

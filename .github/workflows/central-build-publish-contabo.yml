@@ -54,7 +54,7 @@ on:
       pipelines_ref:
         required: false
         type: string
-        default: "main"
+        default: "develop"
         description: >-
           Git ref of AM-Portfolio/am-pipelines for Contabo scripts checkout.
           When testing a fix/* branch, set this to the same ref as the workflow
@@ -457,7 +457,7 @@ jobs:
       inputs.image_name != '' &&
       (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch') &&
       needs.build.result == 'success' &&
-      (needs.vulnerability-scan.result == 'success' || needs.vulnerability_scan.result == 'skipped') &&
+      (needs.vulnerability-scan.result == 'success' || needs.vulnerability-scan.result == 'skipped') &&
       (needs.misconfig-scan.result == 'success' || needs.misconfig-scan.result == 'skipped') &&
       (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped') &&
       (

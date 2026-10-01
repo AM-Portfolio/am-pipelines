@@ -70,7 +70,7 @@ function Get-EnrolledRepos([string]$gitops) {
 function Set-RepoSecret([string]$repo, [string]$name, [string]$value) {
   $value = $value.Trim().Trim("`r").Trim("`n")
   if ($name -eq "ARGOCD_SERVER" -and $value -notmatch '^https://[A-Za-z0-9._-]+$') {
-    throw "Refusing to set ARGOCD_SERVER on $repo - expected https host URL, got len=$($value.Length)"
+    throw "Refusing to set ARGOCD_SERVER on $repo — expected https host URL, got len=$($value.Length)"
   }
   if ($DryRun) {
     Write-Host "DRYRUN gh secret set $name -R $repo (len=$($value.Length))"
@@ -138,6 +138,28 @@ foreach ($repo in $repos) {
   } catch {
     Write-Warning "SKIP $repo : $($_.Exception.Message)"
   }
+  # Contabo Approve jobs use job.environment = dig|preprod|prod|dr — env secrets OVERRIDE repo secrets.
+  # Stale env ARGOCD_AUTH_TOKEN caused HTTP 401 "token is expired" while Auto sync (no env) still worked.
+  foreach ($envName in @("dev", "preprod", "prod", "dr")) {
+    try {
+      if ($DryRun) {
+        Write-Host "DRYRUN gh secret set ARGOCD_* -R $repo -e $envName"
+        continue
+      }
+      $t = $token.Trim().Trim("`r").Trim("`n")
+      $s = $server.Trim().Trim("`r").Trim("`n")
+      gh secret set ARGOCD_AUTH_TOKEN -R $repo --env $envName --body $t
+      if ($LASTEXITCODE -ne 0) { throw "env $envName ARGOCD_AUTH_TOKEN failed" }
+      gh secret set ARGOCD_SERVER -R $repo --env $envName --body $s
+      if ($LASTEXITCODE -ne 0) { throw "env $envName ARGOCD_SERVER failed" }
+      if ($ghPat) {
+        gh secret set AM_GITHUB_PAT -R $repo --env $envName --body $ghPat.Trim()
+      }
+      Write-Host "OK $repo env/$envName :: ARGOCD_*"
+    } catch {
+      Write-Warning "SKIP $repo env/$envName : $($_.Exception.Message)"
+    }
+  }
 }
 
-Write-Host "Done. Contabo Approve needs ARGOCD_* (and AM_GITHUB_PAT for prod/dr promote to am-gitops)."
+Write-Host "Done. Contabo Approve needs ARGOCD_* on repo AND dig/preprod/prod/dr environments (env overrides repo)."

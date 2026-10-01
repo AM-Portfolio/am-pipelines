@@ -1,20 +1,19 @@
 #!/usr/bin/env bash
 # Roll dev/preprod image via Argo API helm parameters — NO gitops / service commits.
-# dev + preprod → Contabo Argo (ARGOCD_SERVER + ARGOCD_AUTH_TOKEN).
+# Contabo Argo (ARGOCD_SERVER + ARGOCD_AUTH_TOKEN).
 #
-# When Contabo nonprod VPS is down (nonprod-dr active), dev and preprod rolls
-# target laptop Kind am-dev-apps (not am-vps-nonprod).
+# Policy: env=dev and env=preprod always dest am-dev-apps
+#   (am-apps-dev / am-apps-preprod). Contabo am-vps-nonprod is for AI agents.
+# Opt-in: NONPROD_ORIGIN=vps forces Contabo Kind for that roll only.
 #
 # Env:
 #   INPUT_SERVICE_NAME  e.g. am-api-gateway
-#   INPUT_ENVIRONMENT   dev|preprod
+#   INPUT_ENVIRONMENT   dev|preprod  (legacy dig accepted as alias of dev)
 #   INPUT_IMAGE_TAG     GHCR tag (usually github.run_id)
 #   ARGOCD_AUTH_TOKEN
 # Optional:
 #   ARGOCD_SERVER, WAIT_HEALTH_SECONDS
-#   NONPROD_ORIGIN=local|vps  (default: auto — dev always am-dev-apps;
-#     preprod retargets when already on am-dev-apps, NONPROD_ORIGIN=local,
-#     or Argo cluster am-vps-nonprod connection != Successful)
+#   NONPROD_ORIGIN=vps  (opt-in Contabo Kind; default never)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,14 +21,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/argo-api-lib.sh"
 
 SVC="${INPUT_SERVICE_NAME:?}"
-ENV="${INPUT_ENVIRONMENT:?}"
+ENV_RAW="${INPUT_ENVIRONMENT:?}"
 TAG="${INPUT_IMAGE_TAG:?}"
+
+# Canonical env: dig → dev (compat only; never teach dig as the env name)
+case "$ENV_RAW" in
+  dig) ENV=dev ;;
+  *) ENV="$ENV_RAW" ;;
+esac
 APP="${SVC}-${ENV}"
 
 case "$ENV" in
   dev|preprod) ;;
   *)
-    echo "::error::argo-roll-image-and-wait only supports dev/preprod (got env=${ENV}). Use argo-promote-and-wait for prod/dr."
+    echo "::error::argo-roll-image-and-wait only supports dev/preprod (got env=${ENV_RAW}). Use argo-promote-and-wait for prod/dr."
     exit 1
     ;;
 esac
@@ -43,101 +48,28 @@ if echo "$RAW" | grep -qiE '"code":5|not found'; then
   exit 1
 fi
 
-# Cluster connection SoT: am-vps-nonprod Unknown/Failed => nonprod-dr active
-CLUSTERS_JSON="$(argo_api GET "/api/v1/clusters" 2>/dev/null || echo '{}')"
-VPS_CONN="$(
-  echo "$CLUSTERS_JSON" | python3 -c "$(cat <<'PY'
-import json, sys
-try:
-    d = json.load(sys.stdin)
-except Exception:
-    print("")
-    raise SystemExit(0)
-items = d.get("items") or d.get("clusters") or []
-if isinstance(d, list):
-    items = d
-for c in items:
-    name = c.get("name") or ""
-    server = c.get("server") or ""
-    if name == "am-vps-nonprod" or "am-vps-nonprod" in server:
-        st = ((c.get("connectionState") or {}).get("status") or "")
-        print(st)
-        raise SystemExit(0)
-print("")
-PY
-)"
-)"
-echo "nonprod cluster probe: am-vps-nonprod connection=${VPS_CONN:-unknown}"
-
-# --- nonprod-dr failover: ensure destination is laptop Kind when VPS is down ---
-# python3 -c "$(cat <<'PY'...)" keeps stdin free for the Application JSON pipe.
+# Ensure destination: default am-dev-apps; NONPROD_ORIGIN=vps → am-vps-nonprod (opt-in)
 DEST_PATCHED="$(
-  echo "$RAW" | ENV="$ENV" NONPROD_ORIGIN="${NONPROD_ORIGIN:-}" VPS_CONN="${VPS_CONN:-}" python3 -c "$(cat <<'PY'
+  echo "$RAW" | ENV="$ENV" NONPROD_ORIGIN="${NONPROD_ORIGIN:-}" python3 -c "$(cat <<'PY'
 import json, os, sys
 
 app = json.load(sys.stdin)
 env = os.environ["ENV"]
 origin = (os.environ.get("NONPROD_ORIGIN") or "").strip().lower()
-vps_conn = (os.environ.get("VPS_CONN") or "").strip()
 dest = dict((app.get("spec") or {}).get("destination") or {})
 cur_name = dest.get("name") or ""
 cur_ns = dest.get("namespace") or ""
 
-want_name = "am-dev-apps"
 want_ns = "am-apps-dev" if env == "dev" else "am-apps-preprod"
-
-
-def vps_unreachable():
-    # Contabo Kind offline -> Argo reports Unknown/Failed (not Successful)
-    if vps_conn and vps_conn != "Successful":
-        return True
-    st = app.get("status") or {}
-    conds = st.get("conditions") or []
-    for c in conds:
-        msg = ((c.get("message") or "") + " " + (c.get("type") or "")).lower()
-        if "am-vps-nonprod" in msg and any(
-            x in msg
-            for x in (
-                "unreachable",
-                "unavailable",
-                "timeout",
-                "connection refused",
-                "i/o timeout",
-                "eof",
-            )
-        ):
-            return True
-        if c.get("type") in ("ComparisonError", "InvalidSpecError") and "cluster" in msg:
-            return True
-    health = ((st.get("health") or {}).get("status") or "")
-    if cur_name == "am-vps-nonprod" and health in ("Unknown", "Missing"):
-        return True
-    return False
-
-
-force_dr = False
-reason = ""
-if env == "dev":
-    force_dr = True
-    reason = "dev always nonprod-dr (am-dev-apps)"
-elif origin == "local":
-    force_dr = True
-    reason = "NONPROD_ORIGIN=local"
-elif cur_name == "am-dev-apps":
-    force_dr = True
-    reason = "Application already on am-dev-apps"
-elif origin != "vps" and vps_unreachable():
-    force_dr = True
-    reason = "am-vps-nonprod connection=%s - failover nonprod-dr" % (vps_conn or "down")
-elif origin == "vps":
-    force_dr = False
-    reason = "NONPROD_ORIGIN=vps (keep Contabo nonprod-main)"
+if origin == "vps":
+    want_name = "am-vps-nonprod"
+    reason = "NONPROD_ORIGIN=vps (opt-in Contabo Kind)"
 else:
-    force_dr = False
-    reason = "keep destination name=%s" % (cur_name or "empty")
+    want_name = "am-dev-apps"
+    reason = "dev/preprod always am-dev-apps (VPS reserved for AI agents)"
 
 changed = False
-if force_dr and (cur_name != want_name or cur_ns != want_ns):
+if cur_name != want_name or cur_ns != want_ns:
     dest["name"] = want_name
     dest["namespace"] = want_ns
     dest.pop("server", None)
@@ -148,13 +80,8 @@ if force_dr and (cur_name != want_name or cur_ns != want_ns):
         % (cur_name, cur_ns, want_name, want_ns, reason),
         file=sys.stderr,
     )
-elif force_dr:
-    print("OK dest already %s/%s (%s)" % (want_name, want_ns, reason), file=sys.stderr)
 else:
-    print(
-        "OK dest unchanged name=%s ns=%s (%s)" % (cur_name, cur_ns, reason),
-        file=sys.stderr,
-    )
+    print("OK dest already %s/%s (%s)" % (want_name, want_ns, reason), file=sys.stderr)
 
 json.dump({"app": app, "changed": changed}, sys.stdout)
 PY
@@ -163,13 +90,13 @@ PY
 CHANGED="$(echo "$DEST_PATCHED" | python3 -c 'import json,sys; print("1" if json.load(sys.stdin).get("changed") else "0")')"
 RAW="$(echo "$DEST_PATCHED" | python3 -c 'import json,sys; json.dump(json.load(sys.stdin)["app"], sys.stdout)')"
 if [[ "$CHANGED" == "1" ]]; then
-  echo "::notice::Retargeted ${APP} destination to nonprod-dr (am-dev-apps) — Contabo VPS down / failover"
+  echo "::notice::Retargeted ${APP} destination (${ENV}) — am-dev-apps policy (or NONPROD_ORIGIN=vps)"
 fi
 
 # Build Application PUT body + Sync body (sources with helm.parameters) so AppSet wipe
 # between PUT and sync cannot drop the tag for this sync operation.
 BUILT="$(
-  echo "$RAW" | TAG="$TAG" python3 -c "$(cat <<'PY'
+  echo "$RAW" | TAG="$TAG" SVC="$SVC" INPUT_IMAGE_REPOSITORY="${INPUT_IMAGE_REPOSITORY:-}" python3 -c "$(cat <<'PY'
 import json, os, sys
 
 app = json.load(sys.stdin)
@@ -191,12 +118,22 @@ if idx < 0:
 
 src = dict(sources[idx])
 helm = dict(src.get("helm") or {})
+drop = {"global.image.tag", "global.image.digest", "image.repository"}
 params = [
     p
     for p in list(helm.get("parameters") or [])
-    if (p.get("name") or "") not in ("global.image.tag", "global.image.digest")
+    if (p.get("name") or "") not in drop
 ]
 params.append({"name": "global.image.tag", "value": tag})
+# Contabo CI pushes repo-scoped GHCR path ghcr.io/<owner>/<git-repo>/<image>
+# for bare image_name (see central-build-publish-contabo). Flat am-ai-gateway 403s.
+svc = os.environ.get("SVC") or ""
+repo_override = (os.environ.get("INPUT_IMAGE_REPOSITORY") or "").strip()
+if not repo_override and svc == "am-ai-gateway":
+    repo_override = "am-gateways/am-ai-gateway"
+if repo_override:
+    params.append({"name": "image.repository", "value": repo_override})
+    print("OK: also set image.repository=%s" % repo_override, file=sys.stderr)
 helm["parameters"] = params
 src["helm"] = helm
 sources[idx] = src
@@ -255,29 +192,6 @@ while (( attempt <= max )); do
   if echo "$err" | grep -qiE 'already in progress|"code":9'; then
     echo "::warning::sync ${APP}: another operation in progress — retry ${attempt}/${max}"
     sleep $(( 2 + attempt ))
-    attempt=$((attempt + 1))
-    continue
-  fi
-  # VPS cluster down while still pointing at am-vps-nonprod — force nonprod-dr and retry once
-  if echo "$err" | grep -qiE 'am-vps-nonprod|failed to get server version|EOF|Unavailable|connection refused' \
-    && [[ "${FAILOVER_RETRIED:-0}" != "1" ]] && [[ "$ENV" == "preprod" ]]; then
-    echo "::warning::sync failed talking to Contabo nonprod-main — forcing NONPROD_ORIGIN=local and retry"
-    export NONPROD_ORIGIN=local
-    export FAILOVER_RETRIED=1
-    PATCHED="$(
-      echo "$PATCHED" | python3 -c "$(cat <<'PY'
-import json, sys
-app = json.load(sys.stdin)
-app.setdefault("spec", {})["destination"] = {
-    "name": "am-dev-apps",
-    "namespace": "am-apps-preprod",
-}
-json.dump(app, sys.stdout)
-PY
-)"
-    )"
-    argo_api PUT "/api/v1/applications/${APP}" "$PATCHED" >/dev/null || true
-    sleep 3
     attempt=$((attempt + 1))
     continue
   fi

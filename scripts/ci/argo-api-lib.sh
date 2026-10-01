@@ -46,7 +46,7 @@ argo_api() {
   local resp http sleep_s
 
   while true; do
-    local args=(-sS -w "\n%{http_code}" -X "$method" -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" -H "Content-Type: application/json" -H "User-Agent: am-pipelines-ci")
+    local args=(-sS --connect-timeout 30 --max-time 300 -w "\n%{http_code}" -X "$method" -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" -H "Content-Type: application/json" -H "User-Agent: am-pipelines-ci")
     if [[ -n "$body" ]]; then
       args+=(-d "$body")
     fi
@@ -58,7 +58,7 @@ argo_api() {
       return 0
     fi
 
-    # 4XX Client/Auth/Permission errors (401, 403, 404, etc.) -> max 2 attempts
+    # 4XX Client/Auth/Permission errors (401, 403, 404, 400, 429 etc.) -> max 2 attempts
     if [[ "$http" == 4* ]]; then
       if (( attempt >= max_4xx )); then
         echo "::error::Argo API ${method} ${path} HTTP ${http} (client/auth error, attempt ${attempt}/${max_4xx}): ${resp}" >&2
@@ -72,13 +72,13 @@ argo_api() {
     fi
 
     # 5XX Server/Gateway/Cloudflare errors (500, 502, 503, 504, 520-524) -> max 3 attempts
-    if [[ "$http" == 5* ]]; then
+    if [[ "$http" == 5* || -z "$http" || "$http" == "000" ]]; then
       if (( attempt >= max_5xx )); then
-        echo "::error::Argo API ${method} ${path} HTTP ${http} (server error, attempt ${attempt}/${max_5xx}): ${resp}" >&2
+        echo "::error::Argo API ${method} ${path} HTTP ${http:-000} (server error, attempt ${attempt}/${max_5xx}): ${resp}" >&2
         return 1
       fi
       sleep_s=$(( attempt * 4 ))
-      echo "::warning::Argo API ${method} ${path} HTTP ${http} (server error) — retry ${attempt}/${max_5xx} in ${sleep_s}s" >&2
+      echo "::warning::Argo API ${method} ${path} HTTP ${http:-000} (server error) — retry ${attempt}/${max_5xx} in ${sleep_s}s" >&2
       sleep "$sleep_s"
       attempt=$((attempt + 1))
       continue

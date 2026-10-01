@@ -498,33 +498,14 @@ jobs:
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
-      - name: Argo roll image + wait (dev → Contabo)
-        if: matrix.env == 'dev'
-        env:
-          ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
-          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
-          NONPROD_ORIGIN: ${{ vars.NONPROD_ORIGIN || '' }}
-          INPUT_SERVICE_NAME: ${{ inputs.image_name }}
-          INPUT_ENVIRONMENT: dev
-          INPUT_IMAGE_TAG: ${{ steps.tag.outputs.tag }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${ARGOCD_AUTH_TOKEN:-}" || -z "${ARGOCD_SERVER:-}" ]]; then
-            echo "::error::Missing ARGOCD_AUTH_TOKEN / ARGOCD_SERVER for Contabo Argo (job environment='dev')."
-            exit 1
-          fi
-          chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh
-          chmod +x am-pipelines-repo/scripts/ci/argo-roll-image-and-wait.sh
-          am-pipelines-repo/scripts/ci/argo-roll-image-and-wait.sh
-
-      - name: Pin tag + wait (preprod → Contabo am-gitops)
-        if: matrix.env == 'preprod'
+      - name: Pin tag + wait (dev/preprod → Contabo am-gitops)
+        if: matrix.env == 'dev' || matrix.env == 'preprod'
         env:
           GH_TOKEN: ${{ secrets.AM_GITHUB_PAT || secrets.GITHUB_PAT || github.token }}
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
           INPUT_SERVICE_NAME: ${{ inputs.image_name }}
-          INPUT_ENVIRONMENT: preprod
+          INPUT_ENVIRONMENT: ${{ matrix.env }}
           INPUT_IMAGE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail

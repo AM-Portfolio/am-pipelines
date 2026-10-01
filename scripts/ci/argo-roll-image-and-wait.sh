@@ -144,12 +144,9 @@ src = dict(sources[idx])
 helm = dict(src.get("helm") or {})
 params = list(helm.get("parameters") or [])
 params.append({"name": "global.image.tag", "value": tag})
-# Contabo CI pushes repo-scoped GHCR path ghcr.io/<owner>/<git-repo>/<image>
-# for bare image_name (see central-build-publish-contabo). Flat am-ai-gateway 403s.
-svc = os.environ.get("SVC") or ""
+# Repo-scoped GHCR path from Contabo publish (caller Build output). No per-service map.
+# Shape matches helm image.repository under global.image.registry, e.g. am-trade-management/am-oms.
 repo_override = (os.environ.get("INPUT_IMAGE_REPOSITORY") or "").strip()
-if not repo_override and svc == "am-ai-gateway":
-    repo_override = "am-gateways/am-ai-gateway"
 if repo_override:
     params.append({"name": "image.repository", "value": repo_override})
     print("OK: also set image.repository=%s" % repo_override, file=sys.stderr)

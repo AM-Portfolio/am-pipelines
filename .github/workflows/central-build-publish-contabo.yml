@@ -436,6 +436,8 @@ jobs:
         id: tag
         env:
           TAG_FROM_BUILD: ${{ needs.build.outputs.image_tag }}
+          REPO_PATH_FROM_BUILD: ${{ needs.build.outputs.image_repository_path }}
+          IMAGE_REPO_FULL: ${{ needs.build.outputs.image_repository }}
         run: |
           set -euo pipefail
           TAG="${TAG_FROM_BUILD:-}"
@@ -444,6 +446,12 @@ jobs:
             exit 1
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          REPO_PATH="${REPO_PATH_FROM_BUILD:-}"
+          if [[ -z "$REPO_PATH" && -n "${IMAGE_REPO_FULL:-}" ]]; then
+            REPO_PATH="${IMAGE_REPO_FULL#ghcr.io/}"
+            REPO_PATH="${REPO_PATH#*/}"
+          fi
+          echo "repository_path=${REPO_PATH}" >> "$GITHUB_OUTPUT"
 
       - name: Contabo pin then sync (preprod)
         env:
@@ -453,11 +461,13 @@ jobs:
           INPUT_SERVICE_NAME: ${{ inputs.image_name }}
           INPUT_ENVIRONMENT: preprod
           INPUT_IMAGE_TAG: ${{ steps.tag.outputs.tag }}
+          INPUT_IMAGE_REPOSITORY: ${{ steps.tag.outputs.repository_path }}
         run: |
           set -euo pipefail
           echo "::notice::Auto sync Contabo preprod: pin then sync (main only)."
           chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh
           chmod +x am-pipelines-repo/scripts/ci/argo-pin-then-sync.sh
+          chmod +x am-pipelines-repo/scripts/ci/argo-roll-image-and-wait.sh
           am-pipelines-repo/scripts/ci/argo-pin-then-sync.sh
 
   contabo-approve:
@@ -533,12 +543,14 @@ jobs:
           INPUT_SERVICE_NAME: ${{ inputs.image_name }}
           INPUT_ENVIRONMENT: ${{ matrix.env }}
           INPUT_IMAGE_TAG: ${{ steps.tag.outputs.tag }}
+          # Nested GHCR path for roll fallback (stale flat image / helm param).
+          INPUT_IMAGE_REPOSITORY: ${{ steps.tag.outputs.repository_path }}
         run: |
           set -euo pipefail
           chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh
           chmod +x am-pipelines-repo/scripts/ci/argo-pin-then-sync.sh
-          # Roll (pin) first via set-image-tag — Argo git webhook / valueFiles SoT.
-          # Sync second — avoid long Application PUT through Cloudflare (HTTP 504).
+          chmod +x am-pipelines-repo/scripts/ci/argo-roll-image-and-wait.sh
+          # Pin first (gitops SoT), sync second; roll fallback if stale helm param.
           am-pipelines-repo/scripts/ci/argo-pin-then-sync.sh
       - name: Contabo promote + wait (prod / dr)
         if: matrix.env == 'prod' || matrix.env == 'dr'

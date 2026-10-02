@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # Contabo Approve / Auto sync path for dev/preprod: pin first (gitops webhook SoT), then sync.
-# Avoids long Application PUT through Cloudflare (HTTP 504 on argocd.asrax.in).
+# Prefer sync-only to avoid long Application PUT through Cloudflare (HTTP 504).
+# If sync cannot evidence the tag (stale helm global.image.tag / flat GHCR path),
+# fall back to argo-roll-image-and-wait which sets helm params + sync with sources override.
 #
 # Env:
 #   INPUT_SERVICE_NAME, INPUT_ENVIRONMENT (dev|preprod), INPUT_IMAGE_TAG
 #   GH_TOKEN / GITHUB_TOKEN, ARGOCD_AUTH_TOKEN
 # Optional: ARGOCD_SERVER, WAIT_PIN_SECONDS (default 300), WAIT_HEALTH_SECONDS
-#           PIN_SYNC_ATTEMPTS (default 3) — short sync retries after pin lag
+#           PIN_SYNC_ATTEMPTS (default 2) — short sync retries before roll fallback
+#           INPUT_IMAGE_REPOSITORY — nested GHCR path (e.g. am-market/am-parser) for roll
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,7 +20,7 @@ SVC="${INPUT_SERVICE_NAME:?}"
 ENV_RAW="${INPUT_ENVIRONMENT:?}"
 TAG="${INPUT_IMAGE_TAG:?}"
 WAIT_PIN="${WAIT_PIN_SECONDS:-300}"
-SYNC_ATTEMPTS="${PIN_SYNC_ATTEMPTS:-3}"
+SYNC_ATTEMPTS="${PIN_SYNC_ATTEMPTS:-2}"
 
 case "$ENV_RAW" in
   dig) ENV=dev ;;
@@ -87,11 +90,10 @@ fi
 # Give Argo a moment to see the gitops commit (webhook / poll).
 sleep 5
 
-echo "Sync second: Contabo Argo refresh+sync ${APP} (no Application PUT/roll)"
+echo "Sync second: Contabo Argo refresh+sync ${APP} (prefer no Application PUT/roll)"
 argo_select_env "$ENV"
-# Short per-attempt wait; outer retries cover pin lag / webhook delay.
-# Never call argo-roll / long Application PUT through Cloudflare (HTTP 504).
-export WAIT_HEALTH_SECONDS="${WAIT_HEALTH_SECONDS:-180}"
+# Shorter wait before roll fallback — stale helm params will never clear via sync-only.
+export WAIT_HEALTH_SECONDS="${WAIT_HEALTH_SECONDS:-90}"
 export STRICT_IMAGE_TAG=1
 SYNC_OK=""
 for attempt in $(seq 1 "$SYNC_ATTEMPTS"); do
@@ -101,14 +103,30 @@ for attempt in $(seq 1 "$SYNC_ATTEMPTS"); do
     break
   fi
   if (( attempt < SYNC_ATTEMPTS )); then
-    echo "::warning::${APP} sync wait failed (attempt ${attempt}/${SYNC_ATTEMPTS}) — retry short sync (no Application PUT/roll)"
-    sleep 15
+    echo "::warning::${APP} sync wait failed (attempt ${attempt}/${SYNC_ATTEMPTS}) — retry short sync"
+    sleep 10
   fi
 done
 
-if [[ -z "$SYNC_OK" ]]; then
-  echo "::error::${APP} pin-then-sync failed after ${SYNC_ATTEMPTS} sync attempts — tag=${TAG}"
-  echo "::notice::If Healthy but tag lag persists, check gitops pin image.repository matches nested GHCR path."
-  exit 1
+if [[ -n "$SYNC_OK" ]]; then
+  echo "::notice::OK ${APP} pin-then-sync tag=${TAG}"
+  exit 0
 fi
-echo "::notice::OK ${APP} pin-then-sync tag=${TAG}"
+
+echo "::warning::${APP} sync-only did not evidence tag=${TAG} (stale helm param / flat GHCR) — falling back to argo-roll-image-and-wait"
+chmod +x "${SCRIPT_DIR}/argo-roll-image-and-wait.sh"
+# Prefer caller INPUT_IMAGE_REPOSITORY; else nested path from pin file (set-image-tag writes it).
+if [[ -z "${INPUT_IMAGE_REPOSITORY:-}" ]]; then
+  PIN_RAW=$(gh api "repos/AM-Portfolio/am-gitops/contents/${ENV}/image-tags/${SVC}.yaml" \
+    -H "Accept: application/vnd.github.raw" 2>/dev/null || true)
+  INPUT_IMAGE_REPOSITORY="$(echo "$PIN_RAW" | sed -n 's/.*repository:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  if [[ -n "${INPUT_IMAGE_REPOSITORY}" ]]; then
+    echo "Using image.repository from pin file: ${INPUT_IMAGE_REPOSITORY}"
+  fi
+fi
+export INPUT_SERVICE_NAME="$SVC"
+export INPUT_ENVIRONMENT="$ENV"
+export INPUT_IMAGE_TAG="$TAG"
+export INPUT_IMAGE_REPOSITORY="${INPUT_IMAGE_REPOSITORY:-}"
+"${SCRIPT_DIR}/argo-roll-image-and-wait.sh"
+echo "::notice::OK ${APP} pin-then-roll tag=${TAG}"

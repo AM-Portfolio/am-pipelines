@@ -39,44 +39,49 @@ if [[ -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}" ]]; then
 fi
 export GH_TOKEN="${GH_TOKEN:-$GITHUB_TOKEN}"
 
-echo "Roll (pin first): set-image-tag service=${SVC} env=${ENV} tag=${TAG}"
-BEFORE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-if ! gh workflow run set-image-tag.yml -R AM-Portfolio/am-gitops \
-  -f service="${SVC}" -f env="${ENV}" -f tag="${TAG}"; then
-  echo "::error::set-image-tag dispatch failed"
-  exit 1
-fi
+pin_tag() {
+  local env="$1"
+  local raw
+  raw=$(gh api "repos/AM-Portfolio/am-gitops/contents/${env}/image-tags/${SVC}.yaml" \
+    -H "Accept: application/vnd.github.raw" 2>/dev/null || true)
+  echo "$raw" | sed -n 's/.*tag:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
+}
 
-echo "Waiting for set-image-tag run (up to ${WAIT_PIN}s)..."
-deadline=$((SECONDS + WAIT_PIN))
-PIN_OK=""
-while (( SECONDS < deadline )); do
-  while IFS=$'\t' read -r id status conclusion created; do
-    [[ -z "$id" ]] && continue
-    if [[ "$created" < "$BEFORE" ]]; then
-      continue
-    fi
-    if [[ "$status" == "completed" ]]; then
-      if [[ "$conclusion" != "success" ]]; then
-        echo "::error::set-image-tag run ${id} conclusion=${conclusion}"
-        gh run view "$id" -R AM-Portfolio/am-gitops --log-failed 2>/dev/null | tail -n 40 || true
-        exit 1
-      fi
-      echo "OK: set-image-tag run ${id} pinned ${SVC} ${ENV}=${TAG}"
+CURRENT="$(pin_tag "$ENV")"
+if [[ -n "$CURRENT" && "$CURRENT" == "$TAG" ]]; then
+  echo "Pin already ${ENV}=${TAG}"
+else
+  echo "Roll (pin first): set-image-tag service=${SVC} env=${ENV} tag=${TAG}"
+  if ! gh workflow run set-image-tag.yml -R AM-Portfolio/am-gitops \
+    -f service="${SVC}" -f env="${ENV}" -f tag="${TAG}"; then
+    echo "::error::set-image-tag dispatch failed"
+    exit 1
+  fi
+
+  # Pin file on am-gitops main is SoT. Do NOT watch the shared set-image-tag run
+  # list for success/failure — parallel Contabo Approves (other services/envs)
+  # can show cancelled siblings and falsely fail this job (news/parser bug).
+  echo "Waiting for ${ENV}/image-tags/${SVC}.yaml tag=${TAG} (up to ${WAIT_PIN}s)..."
+  deadline=$((SECONDS + WAIT_PIN))
+  PIN_OK=""
+  while (( SECONDS < deadline )); do
+    NOW="$(pin_tag "$ENV")"
+    if [[ -n "$NOW" && "$NOW" == "$TAG" ]]; then
+      echo "OK: pin landed ${ENV}=${TAG}"
       PIN_OK=1
-      break 2
+      break
     fi
-  done < <(
-    gh run list -R AM-Portfolio/am-gitops --workflow=set-image-tag.yml --limit 15 \
-      --json databaseId,status,conclusion,createdAt \
-      --jq '.[] | [.databaseId, .status, (.conclusion // ""), .createdAt] | @tsv' 2>/dev/null || true
-  )
-  sleep 8
-done
+    echo "pin still ${NOW:-none}; waiting..."
+    sleep 5
+  done
 
-if [[ -z "$PIN_OK" ]]; then
-  echo "::error::Timed out waiting for set-image-tag (${WAIT_PIN}s)"
-  exit 1
+  if [[ -z "$PIN_OK" ]]; then
+    echo "::error::Timed out waiting for ${ENV}/image-tags/${SVC}.yaml tag=${TAG} (${WAIT_PIN}s)"
+    gh run list -R AM-Portfolio/am-gitops --workflow=set-image-tag.yml --limit 5 \
+      --json databaseId,status,conclusion,createdAt \
+      --jq '.[] | "\(.databaseId) \(.status) \(.conclusion // "") \(.createdAt)"' || true
+    exit 1
+  fi
 fi
 
 # Give Argo a moment to see the gitops commit (webhook / poll).

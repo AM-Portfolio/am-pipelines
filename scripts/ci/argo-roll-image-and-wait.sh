@@ -169,30 +169,17 @@ PY
 PATCHED="$(echo "$BUILT" | python3 -c 'import json,sys; json.dump(json.load(sys.stdin)["app"], sys.stdout)')"
 SYNC_BODY="$(echo "$BUILT" | python3 -c 'import json,sys; json.dump(json.load(sys.stdin)["sync"], sys.stdout)')"
 
-argo_api PUT "/api/v1/applications/${APP}" "$PATCHED" >/dev/null
-echo "OK: set helm parameters global.image.tag=${TAG} on ${APP} (no git commit)"
-
-# Confirm param survived immediate AppSet reconcile (best-effort)
-sleep 2
-CHECK="$(argo_api GET "/api/v1/applications/${APP}" || true)"
-PARAM_NOW="$(
-  echo "$CHECK" | TAG="$TAG" python3 -c "$(cat <<'PY'
-import json, sys, os
-app = json.load(sys.stdin)
-got = ""
-for s in (app.get("spec") or {}).get("sources") or []:
-    for p in ((s.get("helm") or {}).get("parameters") or []):
-        if p.get("name") == "global.image.tag":
-            got = p.get("value") or ""
-print(got)
-PY
-)" 2>/dev/null || true
-)"
-if [[ "$PARAM_NOW" != "$TAG" ]]; then
-  echo "::warning::helm.parameters wiped after PUT (got=${PARAM_NOW:-empty}) — sync will still pass sources override with tag=${TAG}"
-  argo_api PUT "/api/v1/applications/${APP}" "$PATCHED" >/dev/null || true
+# Default: skip Application PUT — large PUTs through Cloudflare often HTTP 504.
+# Sync POST with sources override still sets helm global.image.tag (+ image.repository)
+# for this operation. Set ARGO_ROLL_SKIP_PUT=0 to force PUT (best-effort).
+if [[ "${ARGO_ROLL_SKIP_PUT:-1}" == "0" ]]; then
+  if argo_api PUT "/api/v1/applications/${APP}" "$PATCHED" >/dev/null; then
+    echo "OK: set helm parameters global.image.tag=${TAG} on ${APP} (Application PUT)"
+  else
+    echo "::warning::Application PUT failed (Cloudflare 504?) — continuing with sync sources override"
+  fi
 else
-  echo "OK: helm.parameters still present global.image.tag=${PARAM_NOW}"
+  echo "Skipping Application PUT (avoid Cloudflare 504) — sync sources override carries tag=${TAG}"
 fi
 
 # Sync with sources override (retries for in-progress / Kind API EOF)

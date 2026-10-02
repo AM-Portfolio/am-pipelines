@@ -1,0 +1,385 @@
+# Central Mobile iOS - reusable workflow
+# Called by am-modern-ui/mobile-ci.yml.
+#
+# Build IPA + artifact always. TestFlight (internal) / App Store (production)
+# gated by caller inputs (false on feature/develop/hotfix).
+
+name: Central Mobile iOS
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        description: "App directory relative to repo root (e.g. am_app)"
+        required: true
+        type: string
+      flutter_channel:
+        required: false
+        type: string
+        default: "stable"
+      build_mode:
+        description: "debug | release"
+        required: false
+        type: string
+        default: "release"
+      run_analyze:
+        required: false
+        type: boolean
+        default: true
+      run_tests:
+        required: false
+        type: boolean
+        default: true
+      upload_artifact:
+        required: false
+        type: boolean
+        default: true
+      deploy_internal:
+        description: "Upload IPA to TestFlight (internal)"
+        required: false
+        type: boolean
+        default: false
+      deploy_production:
+        description: "Submit to App Store (after TestFlight)"
+        required: false
+        type: boolean
+        default: false
+      bundle_id:
+        description: "iOS bundle identifier"
+        required: false
+        type: string
+        default: "com.asrax.aminvestment"
+      gh_env_internal:
+        required: false
+        type: string
+        default: "ios-internal"
+      gh_env_prod:
+        required: false
+        type: string
+        default: "ios-prod"
+      am_domain:
+        description: "Baked API host (AM_DOMAIN dart-define)"
+        required: false
+        type: string
+        default: ""
+      am_env:
+        description: "Baked env label (AM_ENV): dev | preprod | prod"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      IOS_CERTIFICATE_BASE64:
+        required: false
+      IOS_CERTIFICATE_PASSWORD:
+        required: false
+      IOS_PROVISIONING_PROFILE_BASE64:
+        required: false
+      IOS_KEYCHAIN_PASSWORD:
+        required: false
+      APP_STORE_CONNECT_API_KEY_ID:
+        required: false
+      APP_STORE_CONNECT_API_ISSUER_ID:
+        required: false
+      APP_STORE_CONNECT_API_KEY_BASE64:
+        required: false
+      GOOGLE_WEB_CLIENT_ID:
+        required: false
+      GOOGLE_IOS_CLIENT_ID:
+        required: false
+      GROWTHBOOK_CLIENT_KEY:
+        required: false
+
+jobs:
+  ios-build:
+    name: iOS -> Build
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    outputs:
+      artifact_name: ${{ steps.meta.outputs.artifact_name }}
+
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+
+    steps:
+      - name: Checkout caller repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ inputs.flutter_channel }}
+          cache: true
+
+      - name: Flutter doctor
+        run: flutter doctor -v
+
+      - name: Resolve and Generate Code for All Modules
+        working-directory: ${{ github.workspace }}
+        run: |
+          dirs=$(find . -name "pubspec.yaml" -not -path "*/.*" -exec dirname {} \;)
+          for dir in $dirs; do
+            echo "Processing module in: $dir"
+            (
+              cd "$dir"
+              flutter pub get
+              if grep -q "build_runner:" pubspec.yaml; then
+                dart run build_runner build --delete-conflicting-outputs
+              fi
+            )
+          done
+
+      - name: Flutter analyze
+        if: ${{ inputs.run_analyze }}
+        run: flutter analyze --no-fatal-infos || true
+
+      - name: Flutter test
+        if: ${{ inputs.run_tests }}
+        run: |
+          if [ -d test ]; then
+            flutter test
+          else
+            echo "No test/ directory — skipping flutter test."
+          fi
+
+      - name: Inject Google Sign-In into Info.plist
+        env:
+          GOOGLE_IOS_CLIENT_ID: ${{ secrets.GOOGLE_IOS_CLIENT_ID }}
+          GOOGLE_WEB_CLIENT_ID: ${{ secrets.GOOGLE_WEB_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          PLIST="ios/Runner/Info.plist"
+          if [ -z "${GOOGLE_IOS_CLIENT_ID:-}" ]; then
+            echo "::warning::GOOGLE_IOS_CLIENT_ID empty — leaving Info.plist placeholders"
+            exit 0
+          fi
+          # GIDClientID = iOS OAuth client
+          /usr/libexec/PlistBuddy -c "Set :GIDClientID ${GOOGLE_IOS_CLIENT_ID}" "$PLIST" \
+            || /usr/libexec/PlistBuddy -c "Add :GIDClientID string ${GOOGLE_IOS_CLIENT_ID}" "$PLIST"
+          # URL schemes: com.googleusercontent.apps.<client-id-prefix>
+          IOS_SCHEME="com.googleusercontent.apps.${GOOGLE_IOS_CLIENT_ID%.apps.googleusercontent.com}"
+          WEB_SCHEME=""
+          if [ -n "${GOOGLE_WEB_CLIENT_ID:-}" ]; then
+            WEB_SCHEME="com.googleusercontent.apps.${GOOGLE_WEB_CLIENT_ID%.apps.googleusercontent.com}"
+          fi
+          # Clear and rewrite CFBundleURLTypes[0].CFBundleURLSchemes
+          /usr/libexec/PlistBuddy -c "Delete :CFBundleURLTypes" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes array" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0 dict" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleTypeRole string Editor" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes array" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string ${IOS_SCHEME}" "$PLIST"
+          if [ -n "$WEB_SCHEME" ]; then
+            /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:1 string ${WEB_SCHEME}" "$PLIST"
+          fi
+          echo "Injected GIDClientID and URL schemes into Info.plist"
+
+      - name: Import signing certificate and profile
+        env:
+          IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          IOS_KEYCHAIN_PASSWORD: ${{ secrets.IOS_KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${IOS_CERTIFICATE_BASE64:-}" ] || [ -z "${IOS_PROVISIONING_PROFILE_BASE64:-}" ]; then
+            echo "::warning::iOS signing secrets missing — IPA may use automatic/ad-hoc signing"
+            echo "HAS_SIGNING=0" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          echo "HAS_SIGNING=1" >> "$GITHUB_ENV"
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD="${IOS_KEYCHAIN_PASSWORD:-$(uuidgen)}"
+          CERT_PATH=$RUNNER_TEMP/build_certificate.p12
+          PROFILE_PATH=$RUNNER_TEMP/build_pp.mobileprovision
+          echo "$IOS_CERTIFICATE_BASE64" | base64 --decode > "$CERT_PATH"
+          echo "$IOS_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$IOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin <<< "$(security cms -D -i "$PROFILE_PATH")")
+          cp "$PROFILE_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/"$PROFILE_UUID.mobileprovision"
+          echo "PROFILE_UUID=$PROFILE_UUID" >> "$GITHUB_ENV"
+
+      - name: Resolve Flutter version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          RAW=$(grep -E '^version:' pubspec.yaml | head -n1 | sed -E 's/^version:[[:space:]]*//')
+          RAW=${RAW//$'\r'/}
+          NAME=${RAW%%+*}
+          BUILD=${RAW##*+}
+          if [ "$NAME" = "$RAW" ] || [ -z "$BUILD" ] || ! [[ "$BUILD" =~ ^[0-9]+$ ]]; then
+            BUILD=0
+          fi
+          if [ -z "$NAME" ]; then NAME="0.0.0"; fi
+          CODE=$(( BUILD + ${{ github.run_number }} ))
+          echo "version_name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "version_code=$CODE" >> "$GITHUB_OUTPUT"
+
+      - name: Build iOS IPA
+        env:
+          AM_DOMAIN: ${{ inputs.am_domain }}
+          AM_ENV_LABEL: ${{ inputs.am_env }}
+          VERSION_NAME: ${{ steps.version.outputs.version_name }}
+          VERSION_CODE: ${{ steps.version.outputs.version_code }}
+          AM_GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_WEB_CLIENT_ID }}
+          AM_GOOGLE_IOS_CLIENT_ID: ${{ secrets.GOOGLE_IOS_CLIENT_ID }}
+          AM_GROWTHBOOK_CLIENT_KEY: ${{ secrets.GROWTHBOOK_CLIENT_KEY }}
+        run: |
+          set -euo pipefail
+          EXTRA=()
+          if [ -n "${AM_DOMAIN}" ]; then EXTRA+=(--dart-define="AM_DOMAIN=${AM_DOMAIN}"); fi
+          if [ -n "${AM_ENV_LABEL}" ]; then EXTRA+=(--dart-define="AM_ENV=${AM_ENV_LABEL}"); fi
+          if [ -n "${AM_GOOGLE_CLIENT_ID}" ]; then EXTRA+=(--dart-define="AM_GOOGLE_CLIENT_ID=${AM_GOOGLE_CLIENT_ID}"); fi
+          if [ -n "${AM_GOOGLE_IOS_CLIENT_ID}" ]; then EXTRA+=(--dart-define="AM_GOOGLE_IOS_CLIENT_ID=${AM_GOOGLE_IOS_CLIENT_ID}"); fi
+          if [ -n "${AM_GROWTHBOOK_CLIENT_KEY}" ]; then EXTRA+=(--dart-define="AM_GROWTHBOOK_CLIENT_KEY=${AM_GROWTHBOOK_CLIENT_KEY}"); fi
+          EXPORT_OPTS=()
+          if [ "${HAS_SIGNING:-0}" = "1" ]; then
+            EXPORT_OPTS+=(--export-options-plist=ios/ExportOptions.plist)
+          else
+            # Unsigned / development artifact for CI without certs
+            flutter build ios --no-codesign \
+              --build-name="${VERSION_NAME}" \
+              --build-number="${VERSION_CODE}" \
+              ${EXTRA[@]+"${EXTRA[@]}"}
+            mkdir -p "$GITHUB_WORKSPACE/ios-ci-out"
+            # Package app for artifact (no IPA without signing)
+            APP_PATH=$(find build/ios/iphoneos -name "*.app" 2>/dev/null | head -n1)
+            if [ -n "$APP_PATH" ]; then
+              cp -R "$APP_PATH" "$GITHUB_WORKSPACE/ios-ci-out/"
+            fi
+            echo "UNSIGNED=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          flutter build ipa --release \
+            --build-name="${VERSION_NAME}" \
+            --build-number="${VERSION_CODE}" \
+            ${EXPORT_OPTS[@]+"${EXPORT_OPTS[@]}"} \
+            ${EXTRA[@]+"${EXTRA[@]}"}
+          echo "UNSIGNED=0" >> "$GITHUB_ENV"
+
+      - name: Stage IPA artifact
+        id: meta
+        shell: bash
+        run: |
+          ARTIFACT_NAME="ios-${{ inputs.build_mode }}-${{ github.run_id }}"
+          echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+          mkdir -p "$GITHUB_WORKSPACE/ios-ci-out"
+          if [ "${UNSIGNED:-0}" != "1" ]; then
+            SRC=$(find build/ios/ipa -name "*.ipa" 2>/dev/null | head -n1)
+            if [ -z "$SRC" ]; then
+              echo "ERROR: No .ipa found under build/ios/ipa"
+              find build/ios -type f 2>/dev/null | head -50 || true
+              exit 1
+            fi
+            cp "$SRC" "$GITHUB_WORKSPACE/ios-ci-out/"
+          fi
+          ls -la "$GITHUB_WORKSPACE/ios-ci-out"
+
+      - name: Upload iOS artifact
+        if: ${{ inputs.upload_artifact }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.artifact_name }}
+          path: ${{ github.workspace }}/ios-ci-out/
+          if-no-files-found: error
+          retention-days: 14
+
+  ios-internal:
+    name: iOS -> TestFlight
+    needs: ios-build
+    if: ${{ inputs.deploy_internal }}
+    runs-on: macos-latest
+    environment: ${{ inputs.gh_env_internal }}
+    permissions:
+      contents: read
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.ios-build.outputs.artifact_name }}
+          path: ios-out
+
+      - name: Write App Store Connect API key
+        env:
+          KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEY_BASE64:-}" ] || [ -z "${KEY_ID:-}" ]; then
+            echo "::error::APP_STORE_CONNECT_API_KEY_* secrets required for TestFlight"
+            exit 1
+          fi
+          mkdir -p private_keys
+          echo "$KEY_BASE64" | base64 --decode > "private_keys/AuthKey_${KEY_ID}.p8"
+
+      - name: Upload to TestFlight
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          IPA=$(find ios-out -name "*.ipa" | head -n1)
+          if [ -z "$IPA" ]; then
+            echo "::error::No IPA in artifact — cannot upload to TestFlight"
+            exit 1
+          fi
+          xcrun altool --upload-app --type ios \
+            --file "$IPA" \
+            --apiKey "$APP_STORE_CONNECT_API_KEY_ID" \
+            --apiIssuer "$APP_STORE_CONNECT_API_ISSUER_ID"
+
+  ios-prod:
+    name: iOS -> App Store
+    needs: [ios-build, ios-internal]
+    if: ${{ always() && inputs.deploy_production && (needs.ios-internal.result == 'success' || needs.ios-internal.result == 'skipped') && needs.ios-build.result == 'success' }}
+    runs-on: macos-latest
+    environment: ${{ inputs.gh_env_prod }}
+    permissions:
+      contents: read
+    steps:
+      - name: Require TestFlight when both tracks requested
+        if: ${{ inputs.deploy_internal && needs.ios-internal.result != 'success' }}
+        run: |
+          echo "::error::App Store submit requires TestFlight upload to succeed first"
+          exit 1
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.ios-build.outputs.artifact_name }}
+          path: ios-out
+
+      - name: Write App Store Connect API key
+        env:
+          KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+        run: |
+          set -euo pipefail
+          mkdir -p private_keys
+          echo "$KEY_BASE64" | base64 --decode > "private_keys/AuthKey_${KEY_ID}.p8"
+
+      - name: Submit to App Store
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          IPA=$(find ios-out -name "*.ipa" | head -n1)
+          if [ -z "$IPA" ]; then
+            echo "::error::No IPA in artifact — cannot submit to App Store"
+            exit 1
+          fi
+          # Same binary upload path; ASC promotes from TestFlight / processing to App Store via review.
+          # Full store release is gated by the ios-prod GitHub Environment reviewers.
+          xcrun altool --upload-app --type ios \
+            --file "$IPA" \
+            --apiKey "$APP_STORE_CONNECT_API_KEY_ID" \
+            --apiIssuer "$APP_STORE_CONNECT_API_ISSUER_ID"
+          echo "::notice::IPA uploaded for App Store processing (Environment ios-prod approved)"

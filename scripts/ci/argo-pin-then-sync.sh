@@ -10,6 +10,7 @@
 # Optional: ARGOCD_SERVER, WAIT_PIN_SECONDS (default 300), WAIT_HEALTH_SECONDS
 #           PIN_SYNC_ATTEMPTS (default 2) — short sync retries before roll fallback
 #           INPUT_IMAGE_REPOSITORY — nested GHCR path (e.g. am-market/am-parser) for roll
+#           INPUT_EXTRA_HELM_PARAMS — newline name=value helm params (forces roll path)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -90,30 +91,35 @@ fi
 # Give Argo a moment to see the gitops commit (webhook / poll).
 sleep 5
 
-echo "Sync second: Contabo Argo refresh+sync ${APP} (prefer no Application PUT/roll)"
 argo_select_env "$ENV"
 # Shorter wait before roll fallback — stale helm params will never clear via sync-only.
 export WAIT_HEALTH_SECONDS="${WAIT_HEALTH_SECONDS:-90}"
 export STRICT_IMAGE_TAG=1
-SYNC_OK=""
-for attempt in $(seq 1 "$SYNC_ATTEMPTS"); do
-  echo "Sync attempt ${attempt}/${SYNC_ATTEMPTS} for ${APP} tag=${TAG}"
-  if argo_sync_and_wait_healthy "$APP" "$TAG"; then
-    SYNC_OK=1
-    break
-  fi
-  if (( attempt < SYNC_ATTEMPTS )); then
-    echo "::warning::${APP} sync wait failed (attempt ${attempt}/${SYNC_ATTEMPTS}) — retry short sync"
-    sleep 10
-  fi
-done
 
-if [[ -n "$SYNC_OK" ]]; then
-  echo "::notice::OK ${APP} pin-then-sync tag=${TAG}"
-  exit 0
+# Extra helm params (e.g. Google / GrowthBook clients) require the roll path.
+if [[ -z "${INPUT_EXTRA_HELM_PARAMS:-}" ]]; then
+  echo "Sync second: Contabo Argo refresh+sync ${APP} (prefer no Application PUT/roll)"
+  SYNC_OK=""
+  for attempt in $(seq 1 "$SYNC_ATTEMPTS"); do
+    echo "Sync attempt ${attempt}/${SYNC_ATTEMPTS} for ${APP} tag=${TAG}"
+    if argo_sync_and_wait_healthy "$APP" "$TAG"; then
+      SYNC_OK=1
+      break
+    fi
+    if (( attempt < SYNC_ATTEMPTS )); then
+      echo "::warning::${APP} sync wait failed (attempt ${attempt}/${SYNC_ATTEMPTS}) — retry short sync"
+      sleep 10
+    fi
+  done
+
+  if [[ -n "$SYNC_OK" ]]; then
+    echo "::notice::OK ${APP} pin-then-sync tag=${TAG}"
+    exit 0
+  fi
+  echo "::warning::${APP} sync-only did not evidence tag=${TAG} (stale helm param / flat GHCR) — falling back to argo-roll-image-and-wait"
+else
+  echo "::notice::INPUT_EXTRA_HELM_PARAMS set — using argo-roll-image-and-wait for helm client inject"
 fi
-
-echo "::warning::${APP} sync-only did not evidence tag=${TAG} (stale helm param / flat GHCR) — falling back to argo-roll-image-and-wait"
 chmod +x "${SCRIPT_DIR}/argo-roll-image-and-wait.sh"
 # Prefer caller INPUT_IMAGE_REPOSITORY; else nested path from pin file (set-image-tag writes it).
 if [[ -z "${INPUT_IMAGE_REPOSITORY:-}" ]]; then

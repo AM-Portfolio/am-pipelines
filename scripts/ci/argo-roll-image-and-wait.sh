@@ -96,7 +96,7 @@ fi
 # Build Application PUT body + Sync body (sources with helm.parameters) so AppSet wipe
 # between PUT and sync cannot drop the tag for this sync operation.
 BUILT="$(
-  echo "$RAW" | TAG="$TAG" SVC="$SVC" INPUT_IMAGE_REPOSITORY="${INPUT_IMAGE_REPOSITORY:-}" python3 -c "$(cat <<'PY'
+  echo "$RAW" | TAG="$TAG" SVC="$SVC" INPUT_IMAGE_REPOSITORY="${INPUT_IMAGE_REPOSITORY:-}" INPUT_EXTRA_HELM_PARAMS="${INPUT_EXTRA_HELM_PARAMS:-}" python3 -c "$(cat <<'PY'
 import json, os, sys
 
 app = json.load(sys.stdin)
@@ -117,6 +117,21 @@ if idx < 0:
     sys.exit(1)
 
 drop = {"global.image.tag", "global.image.digest", "image.repository"}
+extra_raw = (os.environ.get("INPUT_EXTRA_HELM_PARAMS") or "").strip()
+extra_names = set()
+extra_params = []
+for line in extra_raw.splitlines():
+    line = line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    name, value = line.split("=", 1)
+    name = name.strip()
+    value = value.strip()
+    if not name:
+        continue
+    extra_names.add(name)
+    extra_params.append({"name": name, "value": value})
+drop |= extra_names
 # Strip image overrides from every source (AppSet sometimes leaves stale
 # helm.parameters on values/imageValues refs; those confuse STRICT wait logs).
 cleaned = []
@@ -150,6 +165,9 @@ repo_override = (os.environ.get("INPUT_IMAGE_REPOSITORY") or "").strip()
 if repo_override:
     params.append({"name": "image.repository", "value": repo_override})
     print("OK: also set image.repository=%s" % repo_override, file=sys.stderr)
+for p in extra_params:
+    params.append(p)
+    print("OK: also set helm %s (from INPUT_EXTRA_HELM_PARAMS)" % p["name"], file=sys.stderr)
 helm["parameters"] = params
 src["helm"] = helm
 sources[idx] = src

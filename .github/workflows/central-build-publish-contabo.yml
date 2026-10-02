@@ -70,6 +70,15 @@ on:
         required: false
       KUBECONFIG_PROD:
         required: false
+      # Optional web client inject (am-modern-ui Contabo ConfigMap via helm params)
+      GOOGLE_WEB_CLIENT_ID:
+        required: false
+      GOOGLE_IOS_CLIENT_ID:
+        required: false
+      GOOGLE_ANDROID_CLIENT_ID:
+        required: false
+      GROWTHBOOK_CLIENT_KEY:
+        required: false
     outputs:
       image_tag:
         description: "Published GHCR image tag (run id)"
@@ -462,9 +471,19 @@ jobs:
           INPUT_ENVIRONMENT: preprod
           INPUT_IMAGE_TAG: ${{ steps.tag.outputs.tag }}
           INPUT_IMAGE_REPOSITORY: ${{ steps.tag.outputs.repository_path }}
+          GOOGLE_WEB_CLIENT_ID: ${{ secrets.GOOGLE_WEB_CLIENT_ID }}
+          GOOGLE_IOS_CLIENT_ID: ${{ secrets.GOOGLE_IOS_CLIENT_ID }}
+          GOOGLE_ANDROID_CLIENT_ID: ${{ secrets.GOOGLE_ANDROID_CLIENT_ID }}
+          GROWTHBOOK_CLIENT_KEY: ${{ secrets.GROWTHBOOK_CLIENT_KEY }}
         run: |
           set -euo pipefail
           echo "::notice::Auto sync Contabo preprod: pin then sync (main only)."
+          EXTRA=""
+          if [ -n "${GOOGLE_WEB_CLIENT_ID:-}" ]; then EXTRA="${EXTRA}appConfig.googleWebClientId=${GOOGLE_WEB_CLIENT_ID}"$'\n'; fi
+          if [ -n "${GOOGLE_IOS_CLIENT_ID:-}" ]; then EXTRA="${EXTRA}appConfig.googleIosClientId=${GOOGLE_IOS_CLIENT_ID}"$'\n'; fi
+          if [ -n "${GOOGLE_ANDROID_CLIENT_ID:-}" ]; then EXTRA="${EXTRA}appConfig.googleAndroidClientId=${GOOGLE_ANDROID_CLIENT_ID}"$'\n'; fi
+          if [ -n "${GROWTHBOOK_CLIENT_KEY:-}" ]; then EXTRA="${EXTRA}appConfig.growthbook.clientKey=${GROWTHBOOK_CLIENT_KEY}"$'\n'; fi
+          export INPUT_EXTRA_HELM_PARAMS="${EXTRA}"
           chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh
           chmod +x am-pipelines-repo/scripts/ci/argo-pin-then-sync.sh
           chmod +x am-pipelines-repo/scripts/ci/argo-roll-image-and-wait.sh
@@ -545,8 +564,18 @@ jobs:
           INPUT_IMAGE_TAG: ${{ steps.tag.outputs.tag }}
           # Nested GHCR path for roll fallback (stale flat image / helm param).
           INPUT_IMAGE_REPOSITORY: ${{ steps.tag.outputs.repository_path }}
+          GOOGLE_WEB_CLIENT_ID: ${{ secrets.GOOGLE_WEB_CLIENT_ID }}
+          GOOGLE_IOS_CLIENT_ID: ${{ secrets.GOOGLE_IOS_CLIENT_ID }}
+          GOOGLE_ANDROID_CLIENT_ID: ${{ secrets.GOOGLE_ANDROID_CLIENT_ID }}
+          GROWTHBOOK_CLIENT_KEY: ${{ secrets.GROWTHBOOK_CLIENT_KEY }}
         run: |
           set -euo pipefail
+          EXTRA=""
+          if [ -n "${GOOGLE_WEB_CLIENT_ID:-}" ]; then EXTRA="${EXTRA}appConfig.googleWebClientId=${GOOGLE_WEB_CLIENT_ID}"$'\n'; fi
+          if [ -n "${GOOGLE_IOS_CLIENT_ID:-}" ]; then EXTRA="${EXTRA}appConfig.googleIosClientId=${GOOGLE_IOS_CLIENT_ID}"$'\n'; fi
+          if [ -n "${GOOGLE_ANDROID_CLIENT_ID:-}" ]; then EXTRA="${EXTRA}appConfig.googleAndroidClientId=${GOOGLE_ANDROID_CLIENT_ID}"$'\n'; fi
+          if [ -n "${GROWTHBOOK_CLIENT_KEY:-}" ]; then EXTRA="${EXTRA}appConfig.growthbook.clientKey=${GROWTHBOOK_CLIENT_KEY}"$'\n'; fi
+          export INPUT_EXTRA_HELM_PARAMS="${EXTRA}"
           chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh
           chmod +x am-pipelines-repo/scripts/ci/argo-pin-then-sync.sh
           chmod +x am-pipelines-repo/scripts/ci/argo-roll-image-and-wait.sh

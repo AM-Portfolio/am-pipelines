@@ -51,12 +51,22 @@ on:
         type: boolean
         default: false
       deploy_preprod:
-        description: "Run Android → Preprod job (Play Internal — Phase 5)"
+        description: "Legacy alias for deploy_internal (Play Internal)"
         required: false
         type: boolean
         default: false
       deploy_prod:
-        description: "Run Android → Prod job (Play Production — Phase 6; caller should set true only on main)"
+        description: "Legacy alias for deploy_production (Play Production)"
+        required: false
+        type: boolean
+        default: false
+      deploy_internal:
+        description: "Upload to Play Internal Testing (main path)"
+        required: false
+        type: boolean
+        default: false
+      deploy_production:
+        description: "Upload to Play Production (main path; after internal)"
         required: false
         type: boolean
         default: false
@@ -72,11 +82,11 @@ on:
       gh_env_preprod:
         required: false
         type: string
-        description: "Explicit GitHub environment name for preprod deployment approval"
+        description: "GitHub environment for Internal Testing (default android-internal)"
       gh_env_prod:
         required: false
         type: string
-        description: "Explicit GitHub environment name for prod deployment approval"
+        description: "GitHub environment for Production (default android-prod)"
       version_code_offset:
         description: "Added to github.run_number for Play versionCode (use if Play already has a higher code)"
         required: false
@@ -102,6 +112,14 @@ on:
       ANDROID_KEY_PASSWORD:
         required: false
       PLAY_STORE_SERVICE_ACCOUNT_JSON:
+        required: false
+      GOOGLE_WEB_CLIENT_ID:
+        required: false
+      GOOGLE_IOS_CLIENT_ID:
+        required: false
+      GOOGLE_ANDROID_CLIENT_ID:
+        required: false
+      GROWTHBOOK_CLIENT_KEY:
         required: false
 
 jobs:
@@ -233,11 +251,19 @@ jobs:
           AM_ENV_LABEL: ${{ inputs.am_env }}
           VERSION_NAME: ${{ steps.version.outputs.version_name }}
           VERSION_CODE: ${{ steps.version.outputs.version_code }}
+          AM_GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_WEB_CLIENT_ID }}
+          AM_GOOGLE_IOS_CLIENT_ID: ${{ secrets.GOOGLE_IOS_CLIENT_ID }}
+          AM_GOOGLE_ANDROID_CLIENT_ID: ${{ secrets.GOOGLE_ANDROID_CLIENT_ID }}
+          AM_GROWTHBOOK_CLIENT_KEY: ${{ secrets.GROWTHBOOK_CLIENT_KEY }}
         run: |
           set -euo pipefail
           EXTRA=()
           if [ -n "${AM_DOMAIN}" ]; then EXTRA+=(--dart-define="AM_DOMAIN=${AM_DOMAIN}"); fi
           if [ -n "${AM_ENV_LABEL}" ]; then EXTRA+=(--dart-define="AM_ENV=${AM_ENV_LABEL}"); fi
+          if [ -n "${AM_GOOGLE_CLIENT_ID}" ]; then EXTRA+=(--dart-define="AM_GOOGLE_CLIENT_ID=${AM_GOOGLE_CLIENT_ID}"); fi
+          if [ -n "${AM_GOOGLE_IOS_CLIENT_ID}" ]; then EXTRA+=(--dart-define="AM_GOOGLE_IOS_CLIENT_ID=${AM_GOOGLE_IOS_CLIENT_ID}"); fi
+          if [ -n "${AM_GOOGLE_ANDROID_CLIENT_ID}" ]; then EXTRA+=(--dart-define="AM_GOOGLE_ANDROID_CLIENT_ID=${AM_GOOGLE_ANDROID_CLIENT_ID}"); fi
+          if [ -n "${AM_GROWTHBOOK_CLIENT_KEY}" ]; then EXTRA+=(--dart-define="AM_GROWTHBOOK_CLIENT_KEY=${AM_GROWTHBOOK_CLIENT_KEY}"); fi
           echo "Building debug APK with AM_DOMAIN=${AM_DOMAIN:-<unset>} AM_ENV=${AM_ENV_LABEL:-<unset>}"
           flutter build apk --debug \
             --build-name="${VERSION_NAME}" \
@@ -251,11 +277,19 @@ jobs:
           AM_ENV_LABEL: ${{ inputs.am_env }}
           VERSION_NAME: ${{ steps.version.outputs.version_name }}
           VERSION_CODE: ${{ steps.version.outputs.version_code }}
+          AM_GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_WEB_CLIENT_ID }}
+          AM_GOOGLE_IOS_CLIENT_ID: ${{ secrets.GOOGLE_IOS_CLIENT_ID }}
+          AM_GOOGLE_ANDROID_CLIENT_ID: ${{ secrets.GOOGLE_ANDROID_CLIENT_ID }}
+          AM_GROWTHBOOK_CLIENT_KEY: ${{ secrets.GROWTHBOOK_CLIENT_KEY }}
         run: |
           set -euo pipefail
           EXTRA=()
           if [ -n "${AM_DOMAIN}" ]; then EXTRA+=(--dart-define="AM_DOMAIN=${AM_DOMAIN}"); fi
           if [ -n "${AM_ENV_LABEL}" ]; then EXTRA+=(--dart-define="AM_ENV=${AM_ENV_LABEL}"); fi
+          if [ -n "${AM_GOOGLE_CLIENT_ID}" ]; then EXTRA+=(--dart-define="AM_GOOGLE_CLIENT_ID=${AM_GOOGLE_CLIENT_ID}"); fi
+          if [ -n "${AM_GOOGLE_IOS_CLIENT_ID}" ]; then EXTRA+=(--dart-define="AM_GOOGLE_IOS_CLIENT_ID=${AM_GOOGLE_IOS_CLIENT_ID}"); fi
+          if [ -n "${AM_GOOGLE_ANDROID_CLIENT_ID}" ]; then EXTRA+=(--dart-define="AM_GOOGLE_ANDROID_CLIENT_ID=${AM_GOOGLE_ANDROID_CLIENT_ID}"); fi
+          if [ -n "${AM_GROWTHBOOK_CLIENT_KEY}" ]; then EXTRA+=(--dart-define="AM_GROWTHBOOK_CLIENT_KEY=${AM_GROWTHBOOK_CLIENT_KEY}"); fi
           echo "Building release APK with AM_DOMAIN=${AM_DOMAIN:-<unset>} AM_ENV=${AM_ENV_LABEL:-<unset>}"
           flutter build apk --release \
             --build-name="${VERSION_NAME}" \
@@ -269,11 +303,19 @@ jobs:
           AM_ENV_LABEL: ${{ inputs.am_env }}
           VERSION_NAME: ${{ steps.version.outputs.version_name }}
           VERSION_CODE: ${{ steps.version.outputs.version_code }}
+          AM_GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_WEB_CLIENT_ID }}
+          AM_GOOGLE_IOS_CLIENT_ID: ${{ secrets.GOOGLE_IOS_CLIENT_ID }}
+          AM_GOOGLE_ANDROID_CLIENT_ID: ${{ secrets.GOOGLE_ANDROID_CLIENT_ID }}
+          AM_GROWTHBOOK_CLIENT_KEY: ${{ secrets.GROWTHBOOK_CLIENT_KEY }}
         run: |
           set -euo pipefail
           EXTRA=()
           if [ -n "${AM_DOMAIN}" ]; then EXTRA+=(--dart-define="AM_DOMAIN=${AM_DOMAIN}"); fi
           if [ -n "${AM_ENV_LABEL}" ]; then EXTRA+=(--dart-define="AM_ENV=${AM_ENV_LABEL}"); fi
+          if [ -n "${AM_GOOGLE_CLIENT_ID}" ]; then EXTRA+=(--dart-define="AM_GOOGLE_CLIENT_ID=${AM_GOOGLE_CLIENT_ID}"); fi
+          if [ -n "${AM_GOOGLE_IOS_CLIENT_ID}" ]; then EXTRA+=(--dart-define="AM_GOOGLE_IOS_CLIENT_ID=${AM_GOOGLE_IOS_CLIENT_ID}"); fi
+          if [ -n "${AM_GOOGLE_ANDROID_CLIENT_ID}" ]; then EXTRA+=(--dart-define="AM_GOOGLE_ANDROID_CLIENT_ID=${AM_GOOGLE_ANDROID_CLIENT_ID}"); fi
+          if [ -n "${AM_GROWTHBOOK_CLIENT_KEY}" ]; then EXTRA+=(--dart-define="AM_GROWTHBOOK_CLIENT_KEY=${AM_GROWTHBOOK_CLIENT_KEY}"); fi
           echo "Building release AAB with AM_DOMAIN=${AM_DOMAIN:-<unset>} AM_ENV=${AM_ENV_LABEL:-<unset>}"
           flutter build appbundle --release \
             --build-name="${VERSION_NAME}" \
@@ -361,11 +403,11 @@ jobs:
   # PREPROD - Play Internal (distribution track; backend via am_domain)
   # ============================================================
   android-preprod:
-    name: Android -> Preprod
+    name: Android -> Internal Testing
     needs: android-build
-    if: ${{ inputs.deploy_preprod }}
+    if: ${{ inputs.deploy_internal || inputs.deploy_preprod }}
     runs-on: ubuntu-latest
-    environment: ${{ inputs.gh_env_preprod || format('preprod-{0}-android', inputs.package_name || 'app') }}
+    environment: ${{ inputs.gh_env_preprod || 'android-internal' }}
     permissions:
       contents: read
     steps:
@@ -385,17 +427,23 @@ jobs:
           status: completed
 
   # ============================================================
-  # PROD - Play Production (implemented in Phase 6; main only)
+  # PROD - Play Production (main only; after Internal)
   # ============================================================
   android-prod:
-    name: Android -> Prod
-    needs: android-build
-    if: ${{ inputs.deploy_prod }}
+    name: Android -> Production
+    needs: [android-build, android-preprod]
+    if: ${{ always() && (inputs.deploy_production || inputs.deploy_prod) && (needs.android-preprod.result == 'success' || needs.android-preprod.result == 'skipped') && needs.android-build.result == 'success' }}
     runs-on: ubuntu-latest
-    environment: ${{ inputs.gh_env_prod || format('prod-{0}-android', inputs.package_name || 'app') }}
+    environment: ${{ inputs.gh_env_prod || 'android-prod' }}
     permissions:
       contents: read
     steps:
+      - name: Require Internal Testing when both tracks requested
+        if: ${{ (inputs.deploy_internal || inputs.deploy_preprod) && needs.android-preprod.result != 'success' }}
+        run: |
+          echo "::error::Play Production requires Internal Testing to succeed first"
+          exit 1
+
       - name: Download build artifact
         uses: actions/download-artifact@v4
         with:

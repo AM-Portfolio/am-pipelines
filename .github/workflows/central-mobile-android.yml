@@ -187,6 +187,7 @@ jobs:
         if: ${{ inputs.run_tests }}
         run: |
           if [ -d test ]; then
+            mkdir -p build
             flutter test
           else
             echo "No test/ directory — skipping flutter test."

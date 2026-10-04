@@ -1,0 +1,76 @@
+# Central Mobile Validate - reusable workflow
+# Common pub get, build_runner, flutter analyze, and flutter test step
+# Executed ONCE before parallel Android and iOS build/packaging pipelines.
+
+name: Central Mobile Validate
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        description: "App directory relative to repo root (e.g. am_app)"
+        required: true
+        type: string
+      flutter_channel:
+        description: "Flutter channel"
+        required: false
+        type: string
+        default: "stable"
+
+jobs:
+  validate:
+    name: Common -> Pub, Analyze & Test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout caller repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ inputs.flutter_channel }}
+          cache: true
+
+      - name: Flutter doctor
+        run: flutter doctor -v
+
+      - name: Resolve and Generate Code for All Modules
+        working-directory: ${{ github.workspace }}
+        run: |
+          dirs=$(find . -name "pubspec.yaml" -not -path "*/.*" -exec dirname {} \;)
+          for dir in $dirs; do
+            echo "----------------------------------------"
+            echo "Processing module in: $dir"
+            echo "----------------------------------------"
+            (
+              cd "$dir"
+              flutter pub get
+              if grep -q "build_runner:" pubspec.yaml; then
+                echo "Running build_runner in $dir..."
+                dart run build_runner build --delete-conflicting-outputs
+              fi
+            )
+          done
+
+      - name: Flutter analyze
+        run: |
+          cd ${{ inputs.working_directory }}
+          flutter analyze --no-fatal-infos || true
+
+      - name: Flutter test
+        run: |
+          cd ${{ inputs.working_directory }}
+          if [ -d test ]; then
+            mkdir -p build
+            flutter test
+          else
+            echo "No test/ directory — skipping flutter test."
+          fi

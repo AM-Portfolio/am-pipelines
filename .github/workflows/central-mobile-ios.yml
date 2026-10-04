@@ -115,6 +115,9 @@ jobs:
       - name: Flutter doctor
         run: flutter doctor -v
 
+      - name: Disable Flutter Swift Package Manager auto-resolution
+        run: flutter config --no-enable-swift-package-manager
+
       - name: Resolve pub dependencies
         working-directory: ${{ github.workspace }}
         run: |

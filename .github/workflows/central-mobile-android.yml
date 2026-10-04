@@ -156,6 +156,13 @@ jobs:
             (cd "$dir" && flutter pub get)
           done
 
+      - name: Run code generation (build_runner)
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          if grep -q "build_runner" pubspec.yaml; then
+            flutter pub run build_runner build --delete-conflicting-outputs
+          fi
+
       - name: Decode Android Keystore
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}

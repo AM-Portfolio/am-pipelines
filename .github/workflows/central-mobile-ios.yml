@@ -126,6 +126,13 @@ jobs:
             (cd "$dir" && flutter pub get)
           done
 
+      - name: Run code generation (build_runner)
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          if grep -q "build_runner" pubspec.yaml; then
+            flutter pub run build_runner build --delete-conflicting-outputs
+          fi
+
       - name: Inject Google Sign-In into Info.plist
         env:
           GOOGLE_IOS_CLIENT_ID: ${{ secrets.GOOGLE_IOS_CLIENT_ID }}
@@ -216,6 +223,7 @@ jobs:
           AM_GROWTHBOOK_CLIENT_KEY: ${{ secrets.GROWTHBOOK_CLIENT_KEY }}
         run: |
           set -euo pipefail
+          if [ -L build ] || [ -f build ]; then rm -rf build; fi
           EXTRA=()
           if [ -n "${AM_DOMAIN}" ]; then EXTRA+=(--dart-define="AM_DOMAIN=${AM_DOMAIN}"); fi
           if [ -n "${AM_ENV_LABEL}" ]; then EXTRA+=(--dart-define="AM_ENV=${AM_ENV_LABEL}"); fi

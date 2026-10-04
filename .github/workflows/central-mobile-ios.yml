@@ -34,6 +34,11 @@ on:
         required: false
         type: boolean
         default: true
+      keep_artifact:
+        description: "Also upload a long-lived ios-keep-* artifact for backup / reuse"
+        required: false
+        type: boolean
+        default: false
       deploy_internal:
         description: "Upload IPA to TestFlight (internal)"
         required: false
@@ -286,6 +291,16 @@ jobs:
           path: ${{ github.workspace }}/ios-ci-out/
           if-no-files-found: error
           retention-days: 14
+
+      # Long-lived backup for reuse (TestFlight re-upload / local install) without rebuilding
+      - name: Upload iOS keep artifact (backup)
+        if: ${{ inputs.upload_artifact && inputs.keep_artifact }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-keep-${{ github.sha }}
+          path: ${{ github.workspace }}/ios-ci-out/
+          if-no-files-found: error
+          retention-days: 90
 
   ios-internal:
     name: iOS -> TestFlight

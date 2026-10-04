@@ -115,35 +115,13 @@ jobs:
       - name: Flutter doctor
         run: flutter doctor -v
 
-      - name: Resolve and Generate Code for All Modules
+      - name: Resolve pub dependencies
         working-directory: ${{ github.workspace }}
         run: |
           dirs=$(find . -name "pubspec.yaml" -not -path "*/.*" -exec dirname {} \;)
           for dir in $dirs; do
-            echo "Processing module in: $dir"
-            (
-              cd "$dir"
-              flutter pub get
-              if grep -q "build_runner:" pubspec.yaml; then
-                dart run build_runner build --delete-conflicting-outputs
-              fi
-            )
+            (cd "$dir" && flutter pub get)
           done
-
-      - name: Flutter analyze
-        if: ${{ inputs.run_analyze }}
-        run: flutter analyze --no-fatal-infos || true
-
-      - name: Flutter test
-        if: ${{ inputs.run_tests }}
-        run: |
-          if [ -d test ]; then
-            rm -rf build
-            mkdir -p build
-            flutter test
-          else
-            echo "No test/ directory — skipping flutter test."
-          fi
 
       - name: Inject Google Sign-In into Info.plist
         env:

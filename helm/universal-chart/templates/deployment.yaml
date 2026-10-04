@@ -113,7 +113,7 @@ spec:
               {{- if eq .Values.language "java" }}
               exec java ${JAVA_OPTS:--Xmx512m} -jar app.jar
               {{- else if eq .Values.language "flutter" }}
-              exec nginx -g "daemon off;"
+              exec /docker-entrypoint.sh
               {{- else }}
               {{ default (printf "exec uvicorn am_api.api:app --host 0.0.0.0 --port %v" .Values.port) .Values.entrypoint }}
               {{- end }}
@@ -122,8 +122,7 @@ spec:
           command: ["java"]
           args: ["-jar", "app.jar"]
           {{- else if eq .Values.language "flutter" }}
-          command: ["nginx"]
-          args: ["-g", "daemon off;"]
+          {{/* Use image ENTRYPOINT (docker-entrypoint.sh → nginx on :8080). Do not override with bare nginx (binds :80 → Permission denied as UID 1000). */}}
           {{- else if .Values.entrypoint }}
           command: ["/bin/sh", "-c"]
           args: [{{ .Values.entrypoint | quote }}]

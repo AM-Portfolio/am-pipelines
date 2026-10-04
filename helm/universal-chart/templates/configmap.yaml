@@ -1,4 +1,6 @@
 {{- if and .Values.configMap .Values.configMap.enabled }}
+{{- $app := .Values.appConfig | default dict -}}
+{{- $gb := $app.growthbook | default dict -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -11,13 +13,18 @@ data:
   {{- else }}
   config.json: |
     {
-      "domain": {{ and .Values.appConfig .Values.appConfig.domain | quote }},
-      "env": {{ .Values.environment | default "dev" | quote }}
-      {{- if and .Values.appConfig .Values.appConfig.googleWebClientId }},
+      "domain": {{ $app.domain | default "" | quote }},
+      "env": {{ .Values.environment | default "dev" | quote }},
       "google": {
-        "webClientId": {{ .Values.appConfig.googleWebClientId | quote }}
+        "webClientId": {{ $app.googleWebClientId | default "" | quote }},
+        "iosClientId": {{ $app.googleIosClientId | default "" | quote }},
+        "androidClientId": {{ $app.googleAndroidClientId | default "" | quote }}
+      },
+      "growthbook": {
+        "enabled": {{ if hasKey $gb "enabled" }}{{ $gb.enabled }}{{ else }}false{{ end }},
+        "apiHost": {{ $gb.apiHost | default "https://growthbook.asrax.in/gbapi" | quote }},
+        "clientKey": {{ $gb.clientKey | default "" | quote }}
       }
-      {{- end }}
     }
   {{- end }}
 {{- end }}

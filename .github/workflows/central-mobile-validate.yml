@@ -42,23 +42,21 @@ jobs:
       - name: Flutter doctor
         run: flutter doctor -v
 
-      - name: Resolve and Generate Code for All Modules
+      - name: Resolve pub dependencies for all packages
         working-directory: ${{ github.workspace }}
         run: |
           dirs=$(find . -name "pubspec.yaml" -not -path "*/.*" -exec dirname {} \;)
           for dir in $dirs; do
-            echo "----------------------------------------"
-            echo "Processing module in: $dir"
-            echo "----------------------------------------"
-            (
-              cd "$dir"
-              flutter pub get
-              if grep -q "build_runner:" pubspec.yaml; then
-                echo "Running build_runner in $dir..."
-                dart run build_runner build --delete-conflicting-outputs
-              fi
-            )
+            (cd "$dir" && flutter pub get)
           done
+
+      - name: Code generation for target app
+        working-directory: ${{ github.workspace }}
+        run: |
+          cd ${{ inputs.working_directory }}
+          if grep -q "build_runner:" pubspec.yaml; then
+            dart run build_runner build --delete-conflicting-outputs
+          fi
 
       - name: Flutter analyze
         run: |
@@ -69,8 +67,8 @@ jobs:
         run: |
           cd ${{ inputs.working_directory }}
           if [ -d test ]; then
-            if [ -e build ] && [ ! -d build ]; then rm -rf build; fi
-            mkdir -p build || true
+            rm -rf build
+            mkdir -p build
             flutter test
           else
             echo "No test/ directory — skipping flutter test."

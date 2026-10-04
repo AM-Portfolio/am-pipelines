@@ -127,11 +127,15 @@ jobs:
           done
 
       - name: Run code generation (build_runner)
-        working-directory: ${{ inputs.working_directory }}
+        working-directory: ${{ github.workspace }}
         run: |
-          if grep -q "build_runner" pubspec.yaml; then
-            flutter pub run build_runner build --delete-conflicting-outputs
-          fi
+          dirs=$(find . -name "pubspec.yaml" -not -path "*/.*" -exec dirname {})
+          for dir in $dirs; do
+            if grep -q "build_runner" "$dir/pubspec.yaml"; then
+              echo "Running build_runner in $dir..."
+              (cd "$dir" && flutter pub run build_runner build --delete-conflicting-outputs)
+            fi
+          done
 
       - name: Inject Google Sign-In into Info.plist
         env:

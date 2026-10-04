@@ -197,11 +197,16 @@ jobs:
 
       - name: Resolve Play / Flutter version
         id: version
+        env:
+          PLAY_STORE_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
+          PACKAGE_NAME: ${{ inputs.package_name }}
         shell: bash
+        working-directory: ${{ github.workspace }}
         run: |
           set -euo pipefail
+          APP_DIR="${{ inputs.working_directory }}"
           # pubspec: version: 2.0.0+12  →  name=2.0.0  build=12
-          RAW=$(grep -E '^version:' pubspec.yaml | head -n1 | sed -E 's/^version:[[:space:]]*//')
+          RAW=$(grep -E '^version:' "$APP_DIR/pubspec.yaml" | head -n1 | sed -E 's/^version:[[:space:]]*//')
           RAW=${RAW//$'\r'/}
           NAME=${RAW%%+*}
           BUILD=${RAW##*+}
@@ -211,14 +216,25 @@ jobs:
           if [ -z "$NAME" ]; then
             NAME="0.0.0"
           fi
-          # Monotonic Play versionCode: pubspec +N + run_number + optional offset
-          # Ensures every CI run is unique and stays above the committed build number.
           OFFSET=${{ inputs.version_code_offset }}
           RUN_NUMBER=${{ github.run_number }}
           CODE=$(( BUILD + RUN_NUMBER + OFFSET ))
+
+          PLAY_MAX=0
+          if [ -n "${PLAY_STORE_SERVICE_ACCOUNT_JSON:-}" ] && [ -n "${PACKAGE_NAME:-}" ]; then
+            python3 scripts/ci/_play_max_version.py | tee /tmp/play_max.txt
+            PLAY_MAX=$(awk -F= '/^PLAY_MAX=/{print $2}' /tmp/play_max.txt | tail -1)
+            PLAY_MAX=${PLAY_MAX:-0}
+          else
+            echo "Skipping Play max query (no SA JSON or package_name)"
+          fi
+          if [ "$CODE" -le "$PLAY_MAX" ]; then
+            CODE=$((PLAY_MAX + 1))
+          fi
+
           echo "version_name=$NAME" >> "$GITHUB_OUTPUT"
           echo "version_code=$CODE" >> "$GITHUB_OUTPUT"
-          echo "Resolved versionName=$NAME versionCode=$CODE (pubspec_build=$BUILD run_number=$RUN_NUMBER offset=$OFFSET)"
+          echo "Resolved versionName=$NAME versionCode=$CODE (pubspec_build=$BUILD run_number=$RUN_NUMBER offset=$OFFSET play_max=$PLAY_MAX)"
 
       - name: Build Android APK (debug)
         if: ${{ inputs.artifact_type == 'apk' && inputs.build_mode == 'debug' }}

@@ -45,11 +45,6 @@ on:
         required: false
         type: boolean
         default: true
-      deploy_dev:
-        description: "Run Android → Dev job (engineer artifact lane)"
-        required: false
-        type: boolean
-        default: false
       deploy_preprod:
         description: "Legacy alias for deploy_internal (Play Internal)"
         required: false
@@ -75,10 +70,6 @@ on:
         required: false
         type: string
         default: ""
-      gh_env_dev:
-        required: false
-        type: string
-        description: "Explicit GitHub environment name for dev deployment approval"
       gh_env_preprod:
         required: false
         type: string
@@ -368,37 +359,6 @@ jobs:
           path: ${{ github.workspace }}/android-ci-out/
           if-no-files-found: error
           retention-days: 14
-
-  # ============================================================
-  # DEV - engineer builds (artifact lane; Play not required)
-  # ============================================================
-  android-dev:
-    name: Android -> Dev
-    needs: android-build
-    if: ${{ inputs.deploy_dev }}
-    runs-on: ubuntu-latest
-    environment: ${{ inputs.gh_env_dev || format('dev-{0}-android', inputs.package_name || 'app') }}
-    permissions:
-      contents: read
-    steps:
-      - name: Download build artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.android-build.outputs.artifact_name }}
-          path: android-out
-
-      - name: Publish Dev engineer artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-dev-${{ github.run_id }}
-          path: android-out/
-          retention-days: 14
-
-      - name: Dev lane summary
-        run: |
-          echo "OK: Android -> Dev engineer build ready as artifact android-dev-${{ github.run_id }}"
-          echo "Backend host is whatever was baked via am_domain/am_env on the build job."
-          ls -la android-out
 
   # ============================================================
   # PREPROD - Play Internal (distribution track; backend via am_domain)

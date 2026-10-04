@@ -53,13 +53,20 @@ jobs:
       - name: Code generation for all packages
         working-directory: ${{ github.workspace }}
         run: |
-          find . -name "pubspec.yaml" -not -path "*/.*" | while read -r file; do
+          set -euo pipefail
+          while IFS= read -r file; do
             dir=$(dirname "$file")
             if grep -q "build_runner" "$dir/pubspec.yaml"; then
               echo "Running build_runner in $dir..."
               (cd "$dir" && dart run build_runner build --delete-conflicting-outputs)
             fi
-          done
+          done < <(find . -name "pubspec.yaml" -not -path "*/.*")
+          FREEZED="am_portfolio_ui/lib/features/basket/domain/models/basket_detail.freezed.dart"
+          if [ -f "$FREEZED" ] || [ -d am_portfolio_ui ]; then
+            test -f "$FREEZED"
+            grep -q "coversEtfSymbol" "$FREEZED"
+            echo "Freezed BasketLineDetail getters OK"
+          fi
 
       - name: Flutter analyze
         run: |

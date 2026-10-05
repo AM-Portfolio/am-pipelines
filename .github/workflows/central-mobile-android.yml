@@ -61,7 +61,7 @@ on:
         type: boolean
         default: false
       deploy_production:
-        description: "Upload to Play Production (main path; after internal)"
+        description: "Play Production (promote after Internal upload; AAB upload only if Internal skipped)"
         required: false
         type: boolean
         default: false
@@ -124,6 +124,7 @@ jobs:
       contents: read
     outputs:
       artifact_name: ${{ steps.meta.outputs.artifact_name }}
+      version_code: ${{ steps.version.outputs.version_code }}
 
     defaults:
       run:
@@ -405,13 +406,53 @@ jobs:
           echo "::error::Play Production requires Internal Testing to succeed first"
           exit 1
 
+      # Same AAB already on Internal — re-upload fails with "version code already used".
+      # Promote assigns those versionCodes to production (no binary upload).
+      # Checkout am-pipelines (not caller SHA) so re-runs of older commits still get the script.
+      - name: Checkout am-pipelines (promote script)
+        if: ${{ needs.android-preprod.result == 'success' }}
+        uses: actions/checkout@v4
+        with:
+          repository: AM-Portfolio/am-pipelines
+          path: am-pipelines-repo
+          # Same SoT as callers' uses: …@main (script must live on am-pipelines main).
+          ref: main
+
+      - name: Promote Internal release to Production
+        if: ${{ needs.android-preprod.result == 'success' }}
+        env:
+          PLAY_STORE_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
+          PACKAGE_NAME: ${{ inputs.package_name }}
+          FROM_TRACK: internal
+          TO_TRACK: production
+          VERSION_CODE: ${{ needs.android-build.outputs.version_code }}
+          RELEASE_STATUS: completed
+        run: |
+          set -euo pipefail
+          if [ -z "${PLAY_STORE_SERVICE_ACCOUNT_JSON:-}" ]; then
+            echo "::error::PLAY_STORE_SERVICE_ACCOUNT_JSON required to promote to Production"
+            exit 1
+          fi
+          if [ -z "${PACKAGE_NAME:-}" ]; then
+            echo "::error::package_name required to promote to Production"
+            exit 1
+          fi
+          if [ -z "${VERSION_CODE:-}" ]; then
+            echo "::error::android-build version_code output missing"
+            exit 1
+          fi
+          python3 am-pipelines-repo/scripts/ci/_play_promote_track.py
+
+      # Production-only path (Internal skipped): upload AAB to production track.
       - name: Download build artifact
+        if: ${{ needs.android-preprod.result == 'skipped' }}
         uses: actions/download-artifact@v4
         with:
           name: ${{ needs.android-build.outputs.artifact_name }}
           path: android-out
 
       - name: Upload to Google Play Production
+        if: ${{ needs.android-preprod.result == 'skipped' }}
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}

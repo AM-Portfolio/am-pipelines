@@ -19,8 +19,9 @@ Callers set deploy flags **false** on non-`main` branches.
 
 ### Android
 
-- `deploy_internal` / `deploy_preprod` → Play **internal** track (`android-internal` env)
-- `deploy_production` / `deploy_prod` → Play **production** (needs Internal success when both requested; `android-prod` env)
+- `deploy_internal` / `deploy_preprod` → Play **internal** track (`android-internal` env) — **uploads** the AAB
+- `deploy_production` / `deploy_prod` → Play **production** (`android-prod` env): **promotes** the same `versionCode` from Internal (no AAB re-upload). If Internal was skipped, uploads the AAB to production instead.
+- Re-uploading the same AAB to production after Internal fails with Play error `Version code N has already been used` — use promote (`scripts/ci/_play_promote_track.py`).
 - Build always uploads AAB/APK artifact when `upload_artifact: true`
 - Dart-defines from secrets: `AM_GOOGLE_CLIENT_ID`, `AM_GOOGLE_IOS_CLIENT_ID`, `AM_GOOGLE_ANDROID_CLIENT_ID`, `AM_GROWTHBOOK_CLIENT_KEY` (+ `am_domain` / `am_env` inputs)
 

@@ -137,8 +137,6 @@ if ! argo_api POST "/api/v1/applications/${APP}/sync" "$SYNC_BODY" >/dev/null 2>
 fi
 rm -f "$errf"
 echo "OK: sync ${APP} with injected helm params"
-
-export SKIP_REFRESH_SYNC=1
-export STRICT_IMAGE_TAG=0
-argo_sync_and_wait_healthy "$APP" ""
-echo "::notice::OK ${APP} helm params injected"
+# Do NOT call argo_sync_and_wait_healthy here: its Healthy+OutOfSync re-sync
+# drops sources override and wipes the injected params before ConfigMap rolls.
+echo "::notice::OK ${APP} helm params injected (no post-sync wait — avoid wiping override)"

@@ -590,9 +590,25 @@ jobs:
           INPUT_SERVICE_NAME: ${{ inputs.image_name }}
           INPUT_ENVIRONMENT: ${{ matrix.env }}
           INPUT_IMAGE_TAG: ${{ steps.tag.outputs.tag }}
+          INPUT_IMAGE_REPOSITORY: ${{ steps.tag.outputs.repository_path }}
+          GOOGLE_WEB_CLIENT_ID: ${{ secrets.GOOGLE_WEB_CLIENT_ID }}
+          GOOGLE_IOS_CLIENT_ID: ${{ secrets.GOOGLE_IOS_CLIENT_ID }}
+          GOOGLE_ANDROID_CLIENT_ID: ${{ secrets.GOOGLE_ANDROID_CLIENT_ID }}
+          GROWTHBOOK_CLIENT_KEY: ${{ secrets.GROWTHBOOK_CLIENT_KEY }}
         run: |
           set -euo pipefail
           chmod +x am-pipelines-repo/scripts/ci/argo-api-lib.sh
           chmod +x am-pipelines-repo/scripts/ci/argo-promote-and-wait.sh
+          chmod +x am-pipelines-repo/scripts/ci/argo-inject-helm-params.sh
           am-pipelines-repo/scripts/ci/argo-promote-and-wait.sh
+          # SPA config (Google / GrowthBook) — pin path does not set these; inject after promote.
+          EXTRA=""
+          if [ -n "${GOOGLE_WEB_CLIENT_ID:-}" ]; then EXTRA="${EXTRA}appConfig.googleWebClientId=${GOOGLE_WEB_CLIENT_ID}"$'\n'; fi
+          if [ -n "${GOOGLE_IOS_CLIENT_ID:-}" ]; then EXTRA="${EXTRA}appConfig.googleIosClientId=${GOOGLE_IOS_CLIENT_ID}"$'\n'; fi
+          if [ -n "${GOOGLE_ANDROID_CLIENT_ID:-}" ]; then EXTRA="${EXTRA}appConfig.googleAndroidClientId=${GOOGLE_ANDROID_CLIENT_ID}"$'\n'; fi
+          if [ -n "${GROWTHBOOK_CLIENT_KEY:-}" ]; then EXTRA="${EXTRA}appConfig.growthbook.clientKey=${GROWTHBOOK_CLIENT_KEY}"$'\n'; fi
+          if [ -n "${EXTRA}" ]; then
+            export INPUT_EXTRA_HELM_PARAMS="${EXTRA}"
+            am-pipelines-repo/scripts/ci/argo-inject-helm-params.sh
+          fi
 

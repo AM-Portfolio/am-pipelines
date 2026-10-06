@@ -54,11 +54,12 @@ on:
       pipelines_ref:
         required: false
         type: string
-        default: "develop"
+        default: "main"
         description: >-
           Git ref of AM-Portfolio/am-pipelines for Contabo scripts checkout.
           When testing a fix/* branch, set this to the same ref as the workflow
-          uses: line (e.g. fix/contabo-stamp-env-secrets). Default main.
+          uses: line (e.g. fix/contabo-stamp-env-secrets). Default main
+          (develop lacks Contabo scripts like argo-pin-then-sync.sh).
     secrets:
       ARGOCD_AUTH_TOKEN:
         required: false

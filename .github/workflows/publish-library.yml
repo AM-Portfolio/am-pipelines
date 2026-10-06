@@ -71,7 +71,7 @@ jobs:
         with:
           ref: ${{ inputs.git_ref || github.sha }}
           fetch-depth: 0
-          token: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.AM_GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Resolve SDK name
         id: meta

@@ -220,9 +220,10 @@ jobs:
           # Path B: Codemagic-parity — fetch signing via App Store Connect API
           if [ -n "${APP_STORE_CONNECT_API_KEY_BASE64:-}" ] && [ -n "${APP_STORE_CONNECT_API_KEY_ID:-}" ] && [ -n "${APP_STORE_CONNECT_API_ISSUER_ID:-}" ]; then
             echo "iOS p12/profile secrets missing — fetching signing files via ASC API (Codemagic parity)"
-            pip3 install --user 'codemagic-cli-tools'
-            PY_USER_BIN="$(python3 -c 'import site; print(site.USER_BASE)')/bin"
-            export PATH="${PY_USER_BIN}:${HOME}/.local/bin:${PATH}"
+            # PEP 668: macOS runners mark system Python as externally managed — use a venv.
+            python3 -m venv "$RUNNER_TEMP/asc-venv"
+            "$RUNNER_TEMP/asc-venv/bin/pip" install -q 'codemagic-cli-tools'
+            export PATH="$RUNNER_TEMP/asc-venv/bin:${PATH}"
             command -v app-store-connect >/dev/null
             mkdir -p "$RUNNER_TEMP/private_keys"
             P8_PATH="$RUNNER_TEMP/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"

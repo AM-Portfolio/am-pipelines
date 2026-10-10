@@ -40,7 +40,9 @@ Secrets are defined on the **caller** repo (`am-modern-ui`), not on am-pipelines
 
 **Android:** `ANDROID_KEYSTORE_*`, `PLAY_STORE_SERVICE_ACCOUNT_JSON`, `GOOGLE_*`, `GROWTHBOOK_CLIENT_KEY`
 
-**iOS:** `IOS_CERTIFICATE_*`, `IOS_PROVISIONING_PROFILE_BASE64`, `IOS_KEYCHAIN_PASSWORD`, `APP_STORE_CONNECT_API_KEY_ID`, `APP_STORE_CONNECT_API_ISSUER_ID`, `APP_STORE_CONNECT_API_KEY_BASE64`, `GOOGLE_*`, `GROWTHBOOK_CLIENT_KEY`
+**iOS:** `IOS_CERTIFICATE_*`, `IOS_PROVISIONING_PROFILE_BASE64`, `IOS_KEYCHAIN_PASSWORD`, `CERTIFICATE_PRIVATE_KEY` (PEM for ASC fetch when Apple already has a Distribution cert), `APP_STORE_CONNECT_API_KEY_ID`, `APP_STORE_CONNECT_API_ISSUER_ID`, `APP_STORE_CONNECT_API_KEY_BASE64`, `GOOGLE_*`, `GROWTHBOOK_CLIENT_KEY`
+
+ASC fetch without a matching private key fails with `Cannot save Signing Certificates without certificate private key`. Build-only runs (no TestFlight/App Store) soft-fail and continue unsigned; deploy runs require `CERTIFICATE_PRIVATE_KEY` or full p12+profile.
 
 **Web Contabo (optional inherit):** same `GOOGLE_*` + `GROWTHBOOK_CLIENT_KEY` → helm params `appConfig.googleWebClientId` / `googleIosClientId` / `googleAndroidClientId` / `appConfig.growthbook.clientKey` when pin→roll runs.
 

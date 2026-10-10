@@ -81,6 +81,10 @@ on:
         required: false
       IOS_KEYCHAIN_PASSWORD:
         required: false
+      # PEM RSA key matching Distribution cert (or blank to generate + --create).
+      # Required for ASC fetch when Apple already has a Distribution cert without a CI-held private key.
+      CERTIFICATE_PRIVATE_KEY:
+        required: false
       APP_STORE_CONNECT_API_KEY_ID:
         required: false
       APP_STORE_CONNECT_API_ISSUER_ID:
@@ -181,6 +185,7 @@ jobs:
           IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
           IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
           IOS_KEYCHAIN_PASSWORD: ${{ secrets.IOS_KEYCHAIN_PASSWORD }}
+          CERTIFICATE_PRIVATE_KEY: ${{ secrets.CERTIFICATE_PRIVATE_KEY }}
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
           APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
@@ -193,6 +198,17 @@ jobs:
           if [ "${DEPLOY_INTERNAL}" = "true" ] || [ "${DEPLOY_PRODUCTION}" = "true" ]; then
             NEED_IPA=1
           fi
+
+          signing_fail() {
+            local msg="$1"
+            echo "HAS_SIGNING=0" >> "$GITHUB_ENV"
+            if [ "$NEED_IPA" = "1" ]; then
+              echo "::error::${msg}"
+              exit 1
+            fi
+            echo "::warning::${msg} — continuing with unsigned build (TestFlight/App Store not requested)"
+            exit 0
+          }
 
           # Path A: pre-stored Distribution cert + provisioning profile
           if [ -n "${IOS_CERTIFICATE_BASE64:-}" ] && [ -n "${IOS_PROVISIONING_PROFILE_BASE64:-}" ]; then
@@ -217,9 +233,13 @@ jobs:
             exit 0
           fi
 
+          if [ -n "${IOS_CERTIFICATE_BASE64:-}" ] && [ -z "${IOS_PROVISIONING_PROFILE_BASE64:-}" ]; then
+            echo "::notice::IOS_CERTIFICATE_BASE64 set without IOS_PROVISIONING_PROFILE_BASE64 — trying ASC fetch with cert private key"
+          fi
+
           # Path B: Codemagic-parity — fetch signing via App Store Connect API
           if [ -n "${APP_STORE_CONNECT_API_KEY_BASE64:-}" ] && [ -n "${APP_STORE_CONNECT_API_KEY_ID:-}" ] && [ -n "${APP_STORE_CONNECT_API_ISSUER_ID:-}" ]; then
-            echo "iOS p12/profile secrets missing — fetching signing files via ASC API (Codemagic parity)"
+            echo "Fetching signing files via ASC API (Codemagic parity)"
             # PEP 668: macOS runners mark system Python as externally managed — use a venv.
             python3 -m venv "$RUNNER_TEMP/asc-venv"
             "$RUNNER_TEMP/asc-venv/bin/pip" install -q 'codemagic-cli-tools'
@@ -231,8 +251,47 @@ jobs:
             export APP_STORE_CONNECT_KEY_IDENTIFIER="$APP_STORE_CONNECT_API_KEY_ID"
             export APP_STORE_CONNECT_ISSUER_ID="$APP_STORE_CONNECT_API_ISSUER_ID"
             export APP_STORE_CONNECT_PRIVATE_KEY="$(cat "$P8_PATH")"
+
+            CERT_KEY_FILE="$RUNNER_TEMP/private_keys/ios_distribution_private_key.pem"
+            CERT_KEY_ARGS=()
+            if [ -n "${CERTIFICATE_PRIVATE_KEY:-}" ]; then
+              printf '%s\n' "$CERTIFICATE_PRIVATE_KEY" > "$CERT_KEY_FILE"
+              CERT_KEY_ARGS=(--certificate-key="@file:${CERT_KEY_FILE}")
+              echo "Using CERTIFICATE_PRIVATE_KEY secret for ASC fetch"
+            elif [ -n "${IOS_CERTIFICATE_BASE64:-}" ]; then
+              P12_PATH="$RUNNER_TEMP/build_certificate.p12"
+              echo "$IOS_CERTIFICATE_BASE64" | base64 --decode > "$P12_PATH"
+              # OpenSSL 3 needs -legacy for many Apple-exported p12 files
+              if openssl pkcs12 -in "$P12_PATH" -nodes -nocerts -passin "pass:${IOS_CERTIFICATE_PASSWORD:-}" -out "$CERT_KEY_FILE" 2>/dev/null \
+                || openssl pkcs12 -in "$P12_PATH" -nodes -nocerts -passin "pass:${IOS_CERTIFICATE_PASSWORD:-}" -legacy -out "$CERT_KEY_FILE" 2>/dev/null; then
+                if grep -q "PRIVATE KEY" "$CERT_KEY_FILE" 2>/dev/null; then
+                  CERT_KEY_ARGS=(--certificate-key="@file:${CERT_KEY_FILE}")
+                  echo "Extracted Distribution private key from IOS_CERTIFICATE_BASE64"
+                else
+                  rm -f "$CERT_KEY_FILE"
+                  echo "::warning::Could not extract PRIVATE KEY from IOS_CERTIFICATE_BASE64 (wrong IOS_CERTIFICATE_PASSWORD?)"
+                fi
+              else
+                echo "::warning::openssl could not open IOS_CERTIFICATE_BASE64 — set IOS_CERTIFICATE_PASSWORD or CERTIFICATE_PRIVATE_KEY"
+              fi
+            fi
+
+            if [ ${#CERT_KEY_ARGS[@]} -eq 0 ]; then
+              # Codemagic default: generate a key; --create will mint a new Distribution cert if Apple allows.
+              ssh-keygen -t rsa -b 2048 -m PEM -f "$CERT_KEY_FILE" -q -N ""
+              CERT_KEY_ARGS=(--certificate-key="@file:${CERT_KEY_FILE}")
+              echo "::notice::No CERTIFICATE_PRIVATE_KEY / extractable p12 key — generated ephemeral RSA key for ASC --create"
+            fi
+
             keychain initialize
-            app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
+            set +e
+            FETCH_OUT=$(app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create "${CERT_KEY_ARGS[@]}" 2>&1)
+            FETCH_RC=$?
+            set -e
+            echo "$FETCH_OUT"
+            if [ "$FETCH_RC" -ne 0 ]; then
+              signing_fail "ASC fetch-signing-files failed (rc=${FETCH_RC}). Likely: Distribution cert exists without a matching private key. Set CERTIFICATE_PRIVATE_KEY (PEM) or IOS_CERTIFICATE_BASE64+IOS_CERTIFICATE_PASSWORD+IOS_PROVISIONING_PROFILE_BASE64. See https://help.codemagic.io/articles/6381361596-why-am-i-getting-cannot-create-resource-without-certificate-private-key-during-ios-automatic-code-signing"
+            fi
             keychain add-certificates
             xcode-project use-profiles
             echo "HAS_SIGNING=1" >> "$GITHUB_ENV"
@@ -241,12 +300,7 @@ jobs:
             exit 0
           fi
 
-          echo "HAS_SIGNING=0" >> "$GITHUB_ENV"
-          if [ "$NEED_IPA" = "1" ]; then
-            echo "::error::iOS signing unavailable but deploy_internal/deploy_production requested. Set IOS_CERTIFICATE_BASE64 + IOS_PROVISIONING_PROFILE_BASE64, or APP_STORE_CONNECT_API_KEY_* for ASC fetch."
-            exit 1
-          fi
-          echo "::warning::iOS signing secrets missing — unsigned build only (TestFlight/App Store not requested)"
+          signing_fail "iOS signing unavailable. Set IOS_CERTIFICATE_BASE64 + IOS_PROVISIONING_PROFILE_BASE64, or APP_STORE_CONNECT_API_KEY_* (+ CERTIFICATE_PRIVATE_KEY)."
 
       - name: Resolve Flutter version
         id: version

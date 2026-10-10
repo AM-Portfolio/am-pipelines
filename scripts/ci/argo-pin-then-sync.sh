@@ -117,6 +117,8 @@ if [[ -z "${INPUT_EXTRA_HELM_PARAMS:-}" ]]; then
     exit 0
   fi
   echo "::warning::${APP} sync-only did not evidence tag=${TAG} (stale helm param / flat GHCR) — falling back to argo-roll-image-and-wait"
+  # Roll needs a longer health window than the short sync-only probe.
+  export WAIT_HEALTH_SECONDS="${ROLL_WAIT_HEALTH_SECONDS:-300}"
 else
   echo "::notice::INPUT_EXTRA_HELM_PARAMS set — using argo-roll-image-and-wait for helm client inject"
 fi

@@ -178,6 +178,8 @@ sync_body = {
     "name": app["metadata"]["name"],
     "prune": False,
     "sources": sources,
+    # Force so Contabo applies helm param change even when app looks Healthy/Synced
+    "syncOptions": ["Force=true"],
 }
 json.dump({"app": app, "sync": sync_body}, sys.stdout)
 PY
@@ -187,17 +189,18 @@ PY
 PATCHED="$(echo "$BUILT" | python3 -c 'import json,sys; json.dump(json.load(sys.stdin)["app"], sys.stdout)')"
 SYNC_BODY="$(echo "$BUILT" | python3 -c 'import json,sys; json.dump(json.load(sys.stdin)["sync"], sys.stdout)')"
 
-# Default: skip Application PUT — large PUTs through Cloudflare often HTTP 504.
-# Sync POST with sources override still sets helm global.image.tag (+ image.repository)
-# for this operation. Set ARGO_ROLL_SKIP_PUT=0 to force PUT (best-effort).
-if [[ "${ARGO_ROLL_SKIP_PUT:-1}" == "0" ]]; then
+# Prefer Application PUT so helm.parameters persist (AppSet/valueFiles alone leave
+# stale global.image.tag). Sync sources override alone was not updating Contabo
+# live images. PUT uses longer curl timeout (ARGO_API_PUT_MAX_TIME). Set
+# ARGO_ROLL_SKIP_PUT=1 to skip PUT and rely on sync override only.
+if [[ "${ARGO_ROLL_SKIP_PUT:-0}" != "1" ]]; then
   if argo_api PUT "/api/v1/applications/${APP}" "$PATCHED" >/dev/null; then
     echo "OK: set helm parameters global.image.tag=${TAG} on ${APP} (Application PUT)"
   else
     echo "::warning::Application PUT failed (Cloudflare 504?) — continuing with sync sources override"
   fi
 else
-  echo "Skipping Application PUT (avoid Cloudflare 504) — sync sources override carries tag=${TAG}"
+  echo "Skipping Application PUT (ARGO_ROLL_SKIP_PUT=1) — sync sources override carries tag=${TAG}"
 fi
 
 # Sync with sources override (retries for in-progress / Kind API EOF)
@@ -226,8 +229,13 @@ if (( attempt > max )); then
   exit 1
 fi
 
+# Let Contabo start the rollout, then hard-refresh so summary.images / params update.
+sleep 15
+argo_refresh_hard "$APP" || true
+
 export STRICT_IMAGE_TAG=1
-# Skip internal refresh+sync — we already synced with sources override
+export STRICT_WRONG_TAG_SECONDS="${STRICT_WRONG_TAG_SECONDS:-180}"
+# Skip internal refresh+sync — we already synced with sources override / PUT
 export SKIP_REFRESH_SYNC=1
 argo_sync_and_wait_healthy "$APP" "$TAG"
 echo "::notice::OK ${APP} rolled to tag=${TAG} via Contabo API (no am-gitops / service commit)"

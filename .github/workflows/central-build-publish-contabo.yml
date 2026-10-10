@@ -59,6 +59,13 @@ on:
           Git ref of AM-Portfolio/am-pipelines for Contabo scripts checkout.
           When testing a fix/* branch, set this to the same ref as the workflow
           uses: line (e.g. fix/contabo-stamp-env-secrets). Default main.
+      enable_commit_spt:
+        required: false
+        type: boolean
+        default: false
+        description: >-
+          After each successful Contabo env deploy (and auto-sync→preprod),
+          call am-qa-agents spt-after-deploy.yml (Temporal start only). Off by default.
     secrets:
       ARGOCD_AUTH_TOKEN:
         required: false
@@ -78,6 +85,9 @@ on:
       GOOGLE_ANDROID_CLIENT_ID:
         required: false
       GROWTHBOOK_CLIENT_KEY:
+        required: false
+      # Commit→SPT Temporal start (am-qa-agents spt-after-deploy)
+      QA_AGENT_GATEWAY_TOKEN:
         required: false
     outputs:
       image_tag:
@@ -611,4 +621,59 @@ jobs:
             export INPUT_EXTRA_HELM_PARAMS="${EXTRA}"
             am-pipelines-repo/scripts/ci/argo-inject-helm-params.sh
           fi
+
+  # Thin glue only — SPT logic lives in am-qa-agents spt-after-deploy.yml (easy to delete).
+  # Matrix correlation: Contabo→dev fail ⇒ SPT for that env Skipped; other envs still run.
+  spt-after-deploy:
+    name: SPT after Contabo → ${{ matrix.env }}
+    needs: [contabo-approve]
+    # always() so one Contabo env failure does not skip SPT for other successful envs.
+    # Skip entirely when Contabo Approve did not run (skipped/cancelled).
+    if: ${{ always() && inputs.enable_commit_spt == true && needs.contabo-approve.result != 'skipped' && needs.contabo-approve.result != 'cancelled' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # No dr — spt.yaml has no DR QA target
+        env: ${{ fromJSON(((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref_name == 'main' || github.ref_name == 'master')) && '["dev","preprod","prod"]' || '["dev","preprod"]') }}
+    uses: AM-Portfolio/am-qa-agents/.github/workflows/spt-after-deploy.yml@main
+    with:
+      service: ${{ inputs.image_name }}
+      environment: ${{ matrix.env }}
+      git_ref: ${{ github.ref_name }}
+      git_sha: ${{ github.sha }}
+      committer_email: ${{ github.event.head_commit.author.email || github.event.pusher.email || '' }}
+      committer_name: ${{ github.event.head_commit.author.name || github.actor || '' }}
+      repo: ${{ github.repository }}
+      github_run_id: ${{ github.run_id }}
+      github_run_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      github_workflow: ${{ github.workflow }}
+      github_event_name: ${{ github.event_name }}
+      commit_message: ${{ github.event.head_commit.message || '' }}
+    secrets:
+      QA_AGENT_GATEWAY_TOKEN: ${{ secrets.QA_AGENT_GATEWAY_TOKEN }}
+
+  # Auto sync → preprod: SPT without waiting on Contabo Approve (second preprod SPT after Approve is OK).
+  spt-after-auto-sync:
+    name: SPT after auto-sync → preprod
+    needs: [auto-sync-preprod]
+    if: |
+      always() &&
+      inputs.enable_commit_spt == true &&
+      needs.auto-sync-preprod.result == 'success'
+    uses: AM-Portfolio/am-qa-agents/.github/workflows/spt-after-deploy.yml@main
+    with:
+      service: ${{ inputs.image_name }}
+      environment: preprod
+      git_ref: ${{ github.ref_name }}
+      git_sha: ${{ github.sha }}
+      committer_email: ${{ github.event.head_commit.author.email || github.event.pusher.email || '' }}
+      committer_name: ${{ github.event.head_commit.author.name || github.actor || '' }}
+      repo: ${{ github.repository }}
+      github_run_id: ${{ github.run_id }}
+      github_run_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      github_workflow: ${{ github.workflow }}
+      github_event_name: ${{ github.event_name }}
+      commit_message: ${{ github.event.head_commit.message || '' }}
+    secrets:
+      QA_AGENT_GATEWAY_TOKEN: ${{ secrets.QA_AGENT_GATEWAY_TOKEN }}
 

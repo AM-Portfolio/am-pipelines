@@ -178,8 +178,9 @@ sync_body = {
     "name": app["metadata"]["name"],
     "prune": False,
     "sources": sources,
-    # Force so Contabo applies helm param change even when app looks Healthy/Synced
-    "syncOptions": ["Force=true"],
+    # Contabo Argo expects SyncOptions as {items:[...]}, not a bare string array
+    # (array → HTTP 400 cannot unmarshal into application.SyncOptions).
+    "syncOptions": {"items": ["Force=true"]},
 }
 json.dump({"app": app, "sync": sync_body}, sys.stdout)
 PY

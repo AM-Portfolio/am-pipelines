@@ -44,9 +44,14 @@ argo_api() {
   local max_5xx="${ARGO_API_MAX_5XX_RETRIES:-3}"
   local max_4xx="${ARGO_API_MAX_4XX_RETRIES:-2}"
   local resp http sleep_s
+  # Application PUT often needs longer than 45s through Cloudflare
+  local max_time="${ARGO_API_MAX_TIME:-45}"
+  if [[ "$method" == "PUT" ]]; then
+    max_time="${ARGO_API_PUT_MAX_TIME:-120}"
+  fi
 
   while true; do
-    local args=(-sS --connect-timeout 15 --max-time 45 -w "\n%{http_code}" -X "$method" -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" -H "Content-Type: application/json" -H "User-Agent: am-pipelines-ci")
+    local args=(-sS --connect-timeout 15 --max-time "$max_time" -w "\n%{http_code}" -X "$method" -H "Authorization: Bearer ${ARGOCD_AUTH_TOKEN}" -H "Content-Type: application/json" -H "User-Agent: am-pipelines-ci")
     if [[ -n "$body" ]]; then
       args+=(-d "$body")
     fi
@@ -280,9 +285,10 @@ print(health, sync, ",".join(imgs), param_tag)
       tag_ok=0
     fi
 
-    # STRICT: stale helm param / wrong live image will never self-heal via wait.
-    # Fail immediately when Healthy+Synced but images (or param) show a different tag
-    # so pin-then-sync can fall back to argo-roll-image-and-wait without spinning 90s.
+    # STRICT: stale helm param / wrong live image.
+    # Immediate fail ONLY for plain sync-only (SKIP_REFRESH_SYNC!=1) so pin-then-sync
+    # can fall back to roll quickly. After roll sync-with-override, Application.spec
+    # often still shows the old param until PUT lands / pods roll — do not abort then.
     if [[ "${STRICT_IMAGE_TAG:-0}" == "1" && -n "$expect_tag" && "$tag_ok" != "1" ]]; then
       local wrong=0
       if [[ -n "$images" && "$images" != *"$expect_tag"* ]]; then
@@ -290,7 +296,7 @@ print(health, sync, ",".join(imgs), param_tag)
       elif [[ -n "$param_tag" && "$param_tag" != "$expect_tag" && ( -z "$images" || "$images" != *"$expect_tag"* ) ]]; then
         wrong=1
       fi
-      if [[ "$wrong" == "1" && "$health" == "Healthy" && "$sync" == "Synced" ]]; then
+      if [[ "$wrong" == "1" && "$health" == "Healthy" && "$sync" == "Synced" && "${SKIP_REFRESH_SYNC:-0}" != "1" ]]; then
         echo "::error::${app} Healthy/Synced but tag=${expect_tag} not evidenced (images=${images} param=${param_tag}) — stale helm param; fail sync-only so caller can roll"
         argo_print_diagnostics "$app"
         return 1

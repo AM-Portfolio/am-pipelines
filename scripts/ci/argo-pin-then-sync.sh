@@ -21,7 +21,8 @@ SVC="${INPUT_SERVICE_NAME:?}"
 ENV_RAW="${INPUT_ENVIRONMENT:?}"
 TAG="${INPUT_IMAGE_TAG:?}"
 WAIT_PIN="${WAIT_PIN_SECONDS:-300}"
-SYNC_ATTEMPTS="${PIN_SYNC_ATTEMPTS:-2}"
+# One sync-only probe is enough when stale helm param is stuck (immediate fail → roll).
+SYNC_ATTEMPTS="${PIN_SYNC_ATTEMPTS:-1}"
 
 case "$ENV_RAW" in
   dig) ENV=dev ;;

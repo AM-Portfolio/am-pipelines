@@ -137,13 +137,19 @@ argo_print_diagnostics() {
   raw="$(argo_api GET "/api/v1/applications/${app}" || true)"
   [[ -z "$raw" ]] && return 0
 
-  python3 -c '
-import json, sys, os
+  # Heredoc for the script body (avoids broken \" inside python -c quotes).
+  # JSON arrives on stdin via <<<"$raw" — do not pipe into a heredoc (pipe loses).
+  python3 -c "$(cat <<'PY'
+import json, os, sys
+
 d = json.load(sys.stdin)
 st = d.get("status") or {}
 op = st.get("operationState") or {}
 msg = op.get("message") or ""
-conds = [f"{c.get(\"type\")}: {c.get(\"message\")}" for c in (st.get("conditions") or [])]
+conds = [
+    f"{c.get('type')}: {c.get('message')}"
+    for c in (st.get("conditions") or [])
+]
 resource_errors = []
 for r in (st.get("resources") or []):
     rh = ((r.get("health") or {}).get("status") or "")
@@ -153,8 +159,8 @@ for r in (st.get("resources") or []):
         n = r.get("name") or ""
         resource_errors.append(f"  - {k}/{n} [{rh}]: {rm}")
 
-diag = []
-diag.append(f"### ❌ Diagnostic Failure Summary for {d.get(\"metadata\", {}).get(\"name\", \"app\")}")
+name = ((d.get("metadata") or {}).get("name") or "app")
+diag = [f"### Diagnostic Failure Summary for {name}"]
 if msg:
     diag.append(f"**Operation Message**: `{msg}`")
 if conds:
@@ -172,7 +178,8 @@ if summary_file:
             f.write("\n" + out_text + "\n")
     except Exception:
         pass
-' <<<"$raw" || true
+PY
+)" <<<"$raw" || true
 }
 
 # Refresh+sync then poll until Healthy. Optional EXPECT_TAG substring in live images.
@@ -273,13 +280,20 @@ print(health, sync, ",".join(imgs), param_tag)
       tag_ok=0
     fi
 
-    # STRICT fail-fast: stuck on a different tag (stale helm param overriding pin).
+    # STRICT: stale helm param / wrong live image will never self-heal via wait.
+    # Fail immediately when Healthy+Synced but images (or param) show a different tag
+    # so pin-then-sync can fall back to argo-roll-image-and-wait without spinning 90s.
     if [[ "${STRICT_IMAGE_TAG:-0}" == "1" && -n "$expect_tag" && "$tag_ok" != "1" ]]; then
       local wrong=0
       if [[ -n "$images" && "$images" != *"$expect_tag"* ]]; then
         wrong=1
       elif [[ -n "$param_tag" && "$param_tag" != "$expect_tag" && ( -z "$images" || "$images" != *"$expect_tag"* ) ]]; then
         wrong=1
+      fi
+      if [[ "$wrong" == "1" && "$health" == "Healthy" && "$sync" == "Synced" ]]; then
+        echo "::error::${app} Healthy/Synced but tag=${expect_tag} not evidenced (images=${images} param=${param_tag}) — stale helm param; fail sync-only so caller can roll"
+        argo_print_diagnostics "$app"
+        return 1
       fi
       if [[ "$wrong" == "1" && ( "$health" == "Progressing" || "$health" == "Degraded" || "$health" == "Healthy" ) ]]; then
         if (( wrong_tag_since == 0 )); then
@@ -299,6 +313,7 @@ print(health, sync, ",".join(imgs), param_tag)
     if [[ "$health" == "Healthy" ]]; then
       if [[ -n "$expect_tag" && "$tag_ok" != "1" ]]; then
         if [[ "${STRICT_IMAGE_TAG:-0}" == "1" ]]; then
+          # Progressing→Healthy with empty images: brief wait; wrong live images already failed above
           echo "::warning::App Healthy but tag=${expect_tag} not evidenced yet (images=${images} param=${param_tag}) — keep waiting"
           sleep 10
           continue

@@ -72,6 +72,11 @@ on:
         required: false
         type: string
         default: ""
+      testflight_beta_group:
+        description: "TestFlight beta group name (empty = all Internal groups)"
+        required: false
+        type: string
+        default: ""
     secrets:
       IOS_CERTIFICATE_BASE64:
         required: false
@@ -106,6 +111,8 @@ jobs:
       contents: read
     outputs:
       artifact_name: ${{ steps.meta.outputs.artifact_name }}
+      version_name: ${{ steps.version.outputs.version_name }}
+      version_code: ${{ steps.version.outputs.version_code }}
 
     defaults:
       run:
@@ -329,6 +336,23 @@ jobs:
           CODE=$(( BUILD + ${{ github.run_number }} ))
           echo "version_name=$NAME" >> "$GITHUB_OUTPUT"
           echo "version_code=$CODE" >> "$GITHUB_OUTPUT"
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          TS_UTC="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          {
+            echo "## iOS build version"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Marketing version | \`${NAME}\` |"
+            echo "| Build number (CFBundleVersion) | \`${CODE}\` |"
+            echo "| pubspec | \`${RAW}\` |"
+            echo "| Run number | \`${{ github.run_number }}\` |"
+            echo "| SHA | \`${SHORT_SHA}\` |"
+            echo "| Bundle ID | \`${{ inputs.bundle_id }}\` |"
+            echo "| AM_ENV | \`${{ inputs.am_env }}\` |"
+            echo "| Resolved at (UTC) | \`${TS_UTC}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::iOS version ${NAME} (${CODE}) run=${{ github.run_number }} sha=${SHORT_SHA} env=${{ inputs.am_env }} @ ${TS_UTC}"
 
       - name: Build iOS IPA
         env:
@@ -439,6 +463,31 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Release context
+        env:
+          VERSION_NAME: ${{ needs.ios-build.outputs.version_name }}
+          VERSION_CODE: ${{ needs.ios-build.outputs.version_code }}
+          ARTIFACT_NAME: ${{ needs.ios-build.outputs.artifact_name }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          TS_UTC="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          {
+            echo "## TestFlight release"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Marketing version | \`${VERSION_NAME}\` |"
+            echo "| Build number | \`${VERSION_CODE}\` |"
+            echo "| Artifact | \`${ARTIFACT_NAME}\` |"
+            echo "| Run number | \`${{ github.run_number }}\` |"
+            echo "| SHA | \`${SHORT_SHA}\` |"
+            echo "| Bundle ID | \`${{ inputs.bundle_id }}\` |"
+            echo "| AM_ENV | \`${{ inputs.am_env }}\` |"
+            echo "| Job start (UTC) | \`${TS_UTC}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::TestFlight target ${VERSION_NAME} (${VERSION_CODE}) artifact=${ARTIFACT_NAME} sha=${SHORT_SHA}"
+
       - name: Download build artifact
         uses: actions/download-artifact@v4
         with:
@@ -459,9 +508,12 @@ jobs:
           echo "$KEY_BASE64" | base64 --decode > "private_keys/AuthKey_${KEY_ID}.p8"
 
       - name: Upload to TestFlight
+        id: upload
         env:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          VERSION_NAME: ${{ needs.ios-build.outputs.version_name }}
+          VERSION_CODE: ${{ needs.ios-build.outputs.version_code }}
         run: |
           set -euo pipefail
           IPA=$(find ios-out -name "*.ipa" | head -n1)
@@ -469,10 +521,258 @@ jobs:
             echo "::error::No IPA in artifact — cannot upload to TestFlight"
             exit 1
           fi
-          xcrun altool --upload-app --type ios \
+          set +e
+          OUT=$(xcrun altool --upload-app --type ios \
             --file "$IPA" \
             --apiKey "$APP_STORE_CONNECT_API_KEY_ID" \
-            --apiIssuer "$APP_STORE_CONNECT_API_ISSUER_ID"
+            --apiIssuer "$APP_STORE_CONNECT_API_ISSUER_ID" 2>&1)
+          RC=$?
+          set -e
+          echo "$OUT"
+          if [ "$RC" -eq 0 ]; then
+            echo "upload_status=uploaded" >> "$GITHUB_OUTPUT"
+            echo "::notice::altool upload succeeded for ${VERSION_NAME} (${VERSION_CODE})"
+            exit 0
+          fi
+          if echo "$OUT" | grep -qiE 'already been used|DUPLICATE|must be higher than the previously uploaded version'; then
+            echo "upload_status=already_on_asc" >> "$GITHUB_OUTPUT"
+            echo "::notice::Build ${VERSION_CODE} already on ASC — continuing to wait/assign"
+            exit 0
+          fi
+          echo "::error::altool upload failed (rc=${RC})"
+          exit "$RC"
+
+      - name: Wait for ASC processing and assign beta groups
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          BUNDLE_ID: ${{ inputs.bundle_id }}
+          VERSION_CODE: ${{ needs.ios-build.outputs.version_code }}
+          VERSION_NAME: ${{ needs.ios-build.outputs.version_name }}
+          BETA_GROUP_NAME: ${{ inputs.testflight_beta_group }}
+          UPLOAD_STATUS: ${{ steps.upload.outputs.upload_status }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import base64, json, os, sys, time, urllib.error, urllib.parse, urllib.request
+          from pathlib import Path
+
+          def b64url(data: bytes) -> str:
+              return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+          def mint_jwt(key_id: str, issuer: str, p8_path: Path) -> str:
+              import subprocess
+              import tempfile
+
+              now = int(time.time())
+              header = b64url(json.dumps({"alg": "ES256", "kid": key_id, "typ": "JWT"}, separators=(",", ":")).encode())
+              payload = b64url(
+                  json.dumps(
+                      {"iss": issuer, "iat": now, "exp": now + 20 * 60, "aud": "appstoreconnect-v1"},
+                      separators=(",", ":"),
+                  ).encode()
+              )
+              signing_input = f"{header}.{payload}".encode()
+              with tempfile.NamedTemporaryFile(suffix=".sig", delete=False) as sigf:
+                  sig_path = sigf.name
+              try:
+                  subprocess.check_call(
+                      ["openssl", "dgst", "-sha256", "-sign", str(p8_path), "-out", sig_path],
+                      input=signing_input,
+                  )
+                  der = Path(sig_path).read_bytes()
+              finally:
+                  Path(sig_path).unlink(missing_ok=True)
+              # Convert DER ECDSA signature to JOSE raw r||s (64 bytes for P-256)
+              # Parse SEQUENCE of two INTEGERs
+              i = 0
+              assert der[i] == 0x30
+              i += 1
+              if der[i] & 0x80:
+                  i += 1 + (der[i] & 0x7F)
+              else:
+                  i += 1
+
+              def read_int():
+                  nonlocal i
+                  assert der[i] == 0x02
+                  i += 1
+                  ln = der[i]
+                  i += 1
+                  val = der[i : i + ln]
+                  i += ln
+                  return val
+
+              r = read_int().lstrip(b"\x00")
+              s = read_int().lstrip(b"\x00")
+              r = r.rjust(32, b"\x00")[-32:]
+              s = s.rjust(32, b"\x00")[-32:]
+              return f"{header}.{payload}.{b64url(r + s)}"
+
+          def api(method: str, url: str, token: str, body=None):
+              data = None if body is None else json.dumps(body).encode()
+              req = urllib.request.Request(
+                  url,
+                  data=data,
+                  method=method,
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Content-Type": "application/json",
+                      "Accept": "application/json",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=60) as resp:
+                      raw = resp.read().decode()
+                      return resp.status, json.loads(raw) if raw else {}
+              except urllib.error.HTTPError as e:
+                  raw = e.read().decode()
+                  try:
+                      parsed = json.loads(raw) if raw else {}
+                  except json.JSONDecodeError:
+                      parsed = {"raw": raw}
+                  return e.code, parsed
+
+          key_id = os.environ["APP_STORE_CONNECT_API_KEY_ID"]
+          issuer = os.environ["APP_STORE_CONNECT_API_ISSUER_ID"]
+          bundle_id = os.environ["BUNDLE_ID"]
+          version_code = str(os.environ["VERSION_CODE"])
+          version_name = os.environ.get("VERSION_NAME", "")
+          group_filter = (os.environ.get("BETA_GROUP_NAME") or "").strip()
+          upload_status = os.environ.get("UPLOAD_STATUS", "")
+          p8 = Path(f"private_keys/AuthKey_{key_id}.p8")
+          if not p8.is_file():
+              print(f"::error::Missing API key file {p8}", file=sys.stderr)
+              sys.exit(1)
+
+          token = mint_jwt(key_id, issuer, p8)
+          q = urllib.parse.urlencode({"filter[bundleId]": bundle_id, "limit": 1})
+          status, apps = api("GET", f"https://api.appstoreconnect.apple.com/v1/apps?{q}", token)
+          if status != 200 or not apps.get("data"):
+              print(f"::error::ASC apps lookup failed status={status} body={apps}", file=sys.stderr)
+              sys.exit(1)
+          app_id = apps["data"][0]["id"]
+          print(f"ASC app id={app_id} bundle={bundle_id}")
+
+          build = None
+          build_id = None
+          deadline = time.time() + 30 * 60
+          while time.time() < deadline:
+              token = mint_jwt(key_id, issuer, p8)
+              q = urllib.parse.urlencode(
+                  {
+                      "filter[app]": app_id,
+                      "filter[version]": version_code,
+                      "sort": "-uploadedDate",
+                      "limit": 5,
+                  }
+              )
+              status, builds = api("GET", f"https://api.appstoreconnect.apple.com/v1/builds?{q}", token)
+              if status != 200:
+                  print(f"::warning::builds poll status={status} body={builds}")
+                  time.sleep(30)
+                  continue
+              rows = builds.get("data") or []
+              if not rows:
+                  print(f"Build {version_code} not visible yet — waiting…")
+                  time.sleep(30)
+                  continue
+              build = rows[0]
+              build_id = build["id"]
+              attrs = build.get("attributes") or {}
+              state = attrs.get("processingState")
+              uploaded = attrs.get("uploadedDate")
+              print(f"Build {version_code} id={build_id} processingState={state} uploadedDate={uploaded}")
+              if state == "VALID":
+                  break
+              if state == "INVALID":
+                  print(f"::error::ASC build {version_code} INVALID", file=sys.stderr)
+                  with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
+                      fh.write(f"\n### ASC build INVALID\n\n- build: `{version_code}`\n- id: `{build_id}`\n")
+                  sys.exit(1)
+              time.sleep(30)
+          else:
+              print(f"::error::Timed out waiting for build {version_code} VALID", file=sys.stderr)
+              sys.exit(1)
+
+          attrs = build.get("attributes") or {}
+          # Clear export-compliance gate when still missing (common for TF assignment)
+          if attrs.get("usesNonExemptEncryption") is None:
+              token = mint_jwt(key_id, issuer, p8)
+              st, patched = api(
+                  "PATCH",
+                  f"https://api.appstoreconnect.apple.com/v1/builds/{build_id}",
+                  token,
+                  {
+                      "data": {
+                          "type": "builds",
+                          "id": build_id,
+                          "attributes": {"usesNonExemptEncryption": False},
+                      }
+                  },
+              )
+              print(f"Export compliance PATCH status={st}")
+
+          token = mint_jwt(key_id, issuer, p8)
+          q = urllib.parse.urlencode({"filter[app]": app_id, "limit": 50})
+          status, groups = api("GET", f"https://api.appstoreconnect.apple.com/v1/betaGroups?{q}", token)
+          if status != 200:
+              print(f"::error::betaGroups list failed status={status} body={groups}", file=sys.stderr)
+              sys.exit(1)
+
+          assigned = []
+          for g in groups.get("data") or []:
+              gattrs = g.get("attributes") or {}
+              name = gattrs.get("name") or ""
+              is_internal = bool(gattrs.get("isInternalGroup"))
+              if group_filter:
+                  if name != group_filter:
+                      continue
+              elif not is_internal:
+                  continue
+              gid = g["id"]
+              token = mint_jwt(key_id, issuer, p8)
+              st, body = api(
+                  "POST",
+                  f"https://api.appstoreconnect.apple.com/v1/betaGroups/{gid}/relationships/builds",
+                  token,
+                  {"data": [{"type": "builds", "id": build_id}]},
+              )
+              # 204/201 success; 409 already linked is OK
+              if st in (200, 201, 204, 409):
+                  assigned.append(f"{name} ({'internal' if is_internal else 'external'})")
+                  print(f"Assigned build {version_code} → beta group '{name}' (status={st})")
+              else:
+                  print(f"::warning::Failed to assign group '{name}' status={st} body={body}")
+
+          if not assigned:
+              print(
+                  "::error::No TestFlight beta groups assigned "
+                  f"(filter={group_filter or 'all Internal'}). Create an Internal group in ASC.",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          summary = [
+              "",
+              "### ASC / TestFlight assignment",
+              "",
+              f"- Marketing version: `{version_name}`",
+              f"- Build number: `{version_code}`",
+              f"- ASC build id: `{build_id}`",
+              f"- uploadedDate: `{attrs.get('uploadedDate')}`",
+              f"- processingState: `{attrs.get('processingState')}`",
+              f"- altool: `{upload_status}`",
+              f"- Beta groups: {', '.join(f'`{a}`' for a in assigned)}",
+              "",
+          ]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
+              fh.write("\n".join(summary) + "\n")
+          print(
+              f"::notice::TestFlight ready {version_name} ({version_code}) "
+              f"uploaded={attrs.get('uploadedDate')} groups={', '.join(assigned)}"
+          )
+          PY
 
   ios-prod:
     name: iOS -> App Store
@@ -489,13 +789,59 @@ jobs:
           echo "::error::App Store submit requires TestFlight upload to succeed first"
           exit 1
 
+      - name: Release context
+        env:
+          VERSION_NAME: ${{ needs.ios-build.outputs.version_name }}
+          VERSION_CODE: ${{ needs.ios-build.outputs.version_code }}
+          ARTIFACT_NAME: ${{ needs.ios-build.outputs.artifact_name }}
+          TF_RESULT: ${{ needs.ios-internal.result }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          TS_UTC="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          {
+            echo "## App Store release"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Marketing version | \`${VERSION_NAME}\` |"
+            echo "| Build number | \`${VERSION_CODE}\` |"
+            echo "| Artifact | \`${ARTIFACT_NAME}\` |"
+            echo "| TestFlight job | \`${TF_RESULT}\` |"
+            echo "| Run number | \`${{ github.run_number }}\` |"
+            echo "| SHA | \`${SHORT_SHA}\` |"
+            echo "| Bundle ID | \`${{ inputs.bundle_id }}\` |"
+            echo "| AM_ENV | \`${{ inputs.am_env }}\` |"
+            echo "| Job start (UTC) | \`${TS_UTC}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::App Store gate ${VERSION_NAME} (${VERSION_CODE}) tf=${TF_RESULT} sha=${SHORT_SHA}"
+
+      - name: Skip re-upload when TestFlight already delivered binary
+        if: ${{ needs.ios-internal.result == 'success' }}
+        env:
+          VERSION_NAME: ${{ needs.ios-build.outputs.version_name }}
+          VERSION_CODE: ${{ needs.ios-build.outputs.version_code }}
+        run: |
+          set -euo pipefail
+          {
+            echo ""
+            echo "### Submit status"
+            echo ""
+            echo "Binary already on App Store Connect as \`${VERSION_NAME}\` (\`${VERSION_CODE}\`) from TestFlight."
+            echo "ios-prod environment approved. Submit for Review in App Store Connect when processing completes."
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::Skipped App Store altool re-upload — ${VERSION_NAME} (${VERSION_CODE}) already on ASC via TestFlight"
+
       - name: Download build artifact
+        if: ${{ needs.ios-internal.result != 'success' }}
         uses: actions/download-artifact@v4
         with:
           name: ${{ needs.ios-build.outputs.artifact_name }}
           path: ios-out
 
       - name: Write App Store Connect API key
+        if: ${{ needs.ios-internal.result != 'success' }}
         env:
           KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
           KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
@@ -505,9 +851,12 @@ jobs:
           echo "$KEY_BASE64" | base64 --decode > "private_keys/AuthKey_${KEY_ID}.p8"
 
       - name: Submit to App Store
+        if: ${{ needs.ios-internal.result != 'success' }}
         env:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          VERSION_NAME: ${{ needs.ios-build.outputs.version_name }}
+          VERSION_CODE: ${{ needs.ios-build.outputs.version_code }}
         run: |
           set -euo pipefail
           IPA=$(find ios-out -name "*.ipa" | head -n1)
@@ -515,10 +864,29 @@ jobs:
             echo "::error::No IPA in artifact — cannot submit to App Store"
             exit 1
           fi
-          # Same binary upload path; ASC promotes from TestFlight / processing to App Store via review.
-          # Full store release is gated by the ios-prod GitHub Environment reviewers.
-          xcrun altool --upload-app --type ios \
+          set +e
+          OUT=$(xcrun altool --upload-app --type ios \
             --file "$IPA" \
             --apiKey "$APP_STORE_CONNECT_API_KEY_ID" \
-            --apiIssuer "$APP_STORE_CONNECT_API_ISSUER_ID"
-          echo "::notice::IPA uploaded for App Store processing (Environment ios-prod approved)"
+            --apiIssuer "$APP_STORE_CONNECT_API_ISSUER_ID" 2>&1)
+          RC=$?
+          set -e
+          echo "$OUT"
+          if [ "$RC" -eq 0 ]; then
+            echo "::notice::IPA uploaded for App Store processing (Environment ios-prod approved)"
+            echo "### Submit status"$'\n'"altool upload succeeded for \`${VERSION_NAME}\` (\`${VERSION_CODE}\`)." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if echo "$OUT" | grep -qiE 'already been used|DUPLICATE|must be higher than the previously uploaded version'; then
+            echo "::notice::Build ${VERSION_CODE} already on ASC — treating App Store submit as success"
+            {
+              echo ""
+              echo "### Submit status"
+              echo ""
+              echo "ASC reported duplicate \`cfBundleVersion\` for \`${VERSION_NAME}\` (\`${VERSION_CODE}\`) — already uploaded."
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "::error::App Store altool upload failed (rc=${RC})"
+          exit "$RC"

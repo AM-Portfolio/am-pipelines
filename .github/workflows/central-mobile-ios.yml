@@ -349,7 +349,6 @@ jobs:
           if [ -n "${AM_GOOGLE_IOS_CLIENT_ID}" ]; then EXTRA+=(--dart-define="AM_GOOGLE_IOS_CLIENT_ID=${AM_GOOGLE_IOS_CLIENT_ID}"); fi
           if [ -n "${AM_GROWTHBOOK_CLIENT_KEY}" ]; then EXTRA+=(--dart-define="AM_GROWTHBOOK_CLIENT_KEY=${AM_GROWTHBOOK_CLIENT_KEY}"); fi
           EXPORT_OPTS=()
-          XCARGS=()
           if [ "${HAS_SIGNING:-0}" = "1" ]; then
             EXPORT_PLIST="${EXPORT_OPTIONS_PLIST:-ios/ExportOptions.plist}"
             if [ ! -f "$EXPORT_PLIST" ]; then
@@ -357,8 +356,21 @@ jobs:
             fi
             EXPORT_OPTS+=(--export-options-plist="$EXPORT_PLIST")
             TEAM="${DEVELOPMENT_TEAM:-7A3JAJ4Y77}"
-            # Force Distribution/manual so Flutter does not look for Development certs
-            XCARGS+=(--xcargs "CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM=${TEAM} CODE_SIGN_IDENTITY=Apple Distribution PROVISIONING_PROFILE=${PROFILE_UUID:-}")
+            # flutter build ipa has no --xcargs; inject Manual Distribution into Release.xcconfig
+            mkdir -p ios/Flutter
+            {
+              echo "CODE_SIGN_STYLE=Manual"
+              echo "DEVELOPMENT_TEAM=${TEAM}"
+              echo "CODE_SIGN_IDENTITY=Apple Distribution"
+              echo "CODE_SIGN_IDENTITY[sdk=iphoneos*]=Apple Distribution"
+              if [ -n "${PROFILE_UUID:-}" ]; then
+                echo "PROVISIONING_PROFILE=${PROFILE_UUID}"
+              fi
+              if [ -n "${PROFILE_NAME:-}" ]; then
+                echo "PROVISIONING_PROFILE_SPECIFIER=${PROFILE_NAME}"
+              fi
+            } >> ios/Flutter/Release.xcconfig
+            echo "Injected Manual Distribution signing into ios/Flutter/Release.xcconfig (team=${TEAM})"
           else
             # Unsigned only when deploy was not requested (import step fail-fasts otherwise)
             flutter build ios --no-codesign \
@@ -378,7 +390,6 @@ jobs:
             --build-name="${VERSION_NAME}" \
             --build-number="${VERSION_CODE}" \
             ${EXPORT_OPTS[@]+"${EXPORT_OPTS[@]}"} \
-            ${XCARGS[@]+"${XCARGS[@]}"} \
             ${EXTRA[@]+"${EXTRA[@]}"}
           echo "UNSIGNED=0" >> "$GITHUB_ENV"
 

@@ -829,6 +829,30 @@ jobs:
                   },
               )
               print(f"Export compliance PATCH status={st}")
+              # 200/204 success; 409 = already set. Anything else leaves Missing Compliance.
+              if st not in (200, 204, 409):
+                  print(
+                      f"::error::Export compliance PATCH failed status={st} body={patched}",
+                      file=sys.stderr,
+                  )
+                  sys.exit(1)
+              token = mint_jwt(key_id, issuer, p8)
+              st2, builds2 = api(
+                  "GET",
+                  f"https://api.appstoreconnect.apple.com/v1/builds/{build_id}",
+                  token,
+              )
+              enc = ((builds2.get("data") or {}).get("attributes") or {}).get(
+                  "usesNonExemptEncryption"
+              )
+              if enc is None:
+                  print(
+                      "::error::Export compliance still unset after PATCH — "
+                      "ASC will show Missing Compliance",
+                      file=sys.stderr,
+                  )
+                  sys.exit(1)
+              attrs["usesNonExemptEncryption"] = enc
 
           token = mint_jwt(key_id, issuer, p8)
           q = urllib.parse.urlencode({"filter[app]": app_id, "limit": 50})

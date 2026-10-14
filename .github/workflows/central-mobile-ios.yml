@@ -77,6 +77,31 @@ on:
         required: false
         type: string
         default: ""
+      skip_ios_build:
+        description: "Skip Flutter IPA build; reuse a prior Actions artifact"
+        required: false
+        type: boolean
+        default: false
+      reuse_artifact_run_id:
+        description: "Prior workflow run id that owns the IPA artifact"
+        required: false
+        type: string
+        default: ""
+      reuse_artifact_name:
+        description: "Prior artifact name (e.g. ios-release-38629861487)"
+        required: false
+        type: string
+        default: ""
+      reuse_version_name:
+        description: "Marketing version of the reused IPA (e.g. 2.0.0)"
+        required: false
+        type: string
+        default: ""
+      reuse_version_code:
+        description: "CFBundleVersion of the reused IPA (e.g. 207)"
+        required: false
+        type: string
+        default: ""
     secrets:
       IOS_CERTIFICATE_BASE64:
         required: false
@@ -109,32 +134,117 @@ jobs:
     runs-on: macos-latest
     permissions:
       contents: read
+      actions: read
     outputs:
-      artifact_name: ${{ steps.meta.outputs.artifact_name }}
-      version_name: ${{ steps.version.outputs.version_name }}
-      version_code: ${{ steps.version.outputs.version_code }}
+      artifact_name: ${{ steps.meta.outputs.artifact_name || steps.meta_reuse.outputs.artifact_name }}
+      version_name: ${{ steps.version.outputs.version_name || steps.version_reuse.outputs.version_name }}
+      version_code: ${{ steps.version.outputs.version_code || steps.version_reuse.outputs.version_code }}
 
     defaults:
       run:
         working-directory: ${{ inputs.working_directory }}
 
     steps:
+      # --- Reuse prior IPA (no Flutter rebuild) ---
+      - name: Validate reuse inputs
+        if: ${{ inputs.skip_ios_build }}
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          if [ -z "${{ inputs.reuse_artifact_run_id }}" ] || [ -z "${{ inputs.reuse_artifact_name }}" ]; then
+            echo "::error::skip_ios_build requires reuse_artifact_run_id and reuse_artifact_name"
+            exit 1
+          fi
+          if [ -z "${{ inputs.reuse_version_name }}" ] || [ -z "${{ inputs.reuse_version_code }}" ]; then
+            echo "::error::skip_ios_build requires reuse_version_name and reuse_version_code (must match IPA)"
+            exit 1
+          fi
+
+      - name: Download reused IPA artifact
+        if: ${{ inputs.skip_ios_build }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.reuse_artifact_name }}
+          run-id: ${{ inputs.reuse_artifact_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ github.workspace }}/ios-ci-out
+
+      - name: Stage reused version and artifact
+        if: ${{ inputs.skip_ios_build }}
+        id: version_reuse
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          NAME="${{ inputs.reuse_version_name }}"
+          CODE="${{ inputs.reuse_version_code }}"
+          IPA=$(find ios-ci-out -name "*.ipa" | head -n1)
+          if [ -z "$IPA" ]; then
+            echo "::error::No .ipa in reused artifact ${{ inputs.reuse_artifact_name }}"
+            find ios-ci-out -type f | head -50 || true
+            exit 1
+          fi
+          echo "version_name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "version_code=$CODE" >> "$GITHUB_OUTPUT"
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          TS_UTC="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          {
+            echo "## iOS build version (reused artifact)"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Marketing version | \`${NAME}\` |"
+            echo "| Build number (CFBundleVersion) | \`${CODE}\` |"
+            echo "| Source run | \`${{ inputs.reuse_artifact_run_id }}\` |"
+            echo "| Source artifact | \`${{ inputs.reuse_artifact_name }}\` |"
+            echo "| Run number | \`${{ github.run_number }}\` |"
+            echo "| SHA | \`${SHORT_SHA}\` |"
+            echo "| Bundle ID | \`${{ inputs.bundle_id }}\` |"
+            echo "| AM_ENV | \`${{ inputs.am_env }}\` |"
+            echo "| Resolved at (UTC) | \`${TS_UTC}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::Reusing IPA ${NAME} (${CODE}) from run ${{ inputs.reuse_artifact_run_id }} / ${{ inputs.reuse_artifact_name }}"
+          ls -la ios-ci-out
+
+      - name: Publish reused artifact for this run
+        if: ${{ inputs.skip_ios_build }}
+        id: meta_reuse
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          ARTIFACT_NAME="ios-${{ inputs.build_mode }}-${{ github.run_id }}"
+          echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload reused iOS artifact
+        if: ${{ inputs.skip_ios_build && inputs.upload_artifact }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta_reuse.outputs.artifact_name }}
+          path: ${{ github.workspace }}/ios-ci-out/
+          if-no-files-found: error
+          retention-days: 14
+
+      # --- Full Flutter IPA build ---
       - name: Checkout caller repository
+        if: ${{ !inputs.skip_ios_build }}
         uses: actions/checkout@v4
 
       - name: Set up Flutter
+        if: ${{ !inputs.skip_ios_build }}
         uses: subosito/flutter-action@v2
         with:
           channel: ${{ inputs.flutter_channel }}
           cache: true
 
       - name: Flutter doctor
+        if: ${{ !inputs.skip_ios_build }}
         run: flutter doctor -v
 
       - name: Disable Flutter Swift Package Manager auto-resolution
+        if: ${{ !inputs.skip_ios_build }}
         run: flutter config --no-enable-swift-package-manager
 
       - name: Resolve pub dependencies
+        if: ${{ !inputs.skip_ios_build }}
         working-directory: ${{ github.workspace }}
         run: |
           find . -name "pubspec.yaml" -not -path "*/.*" | while read -r file; do
@@ -143,6 +253,7 @@ jobs:
           done
 
       - name: Run code generation (build_runner)
+        if: ${{ !inputs.skip_ios_build }}
         working-directory: ${{ github.workspace }}
         run: |
           set -euo pipefail
@@ -155,6 +266,7 @@ jobs:
           done < <(find . -name "pubspec.yaml" -not -path "*/.*")
 
       - name: Inject Google Sign-In into Info.plist
+        if: ${{ !inputs.skip_ios_build }}
         env:
           GOOGLE_IOS_CLIENT_ID: ${{ secrets.GOOGLE_IOS_CLIENT_ID }}
           GOOGLE_WEB_CLIENT_ID: ${{ secrets.GOOGLE_WEB_CLIENT_ID }}
@@ -187,6 +299,7 @@ jobs:
           echo "Injected GIDClientID and URL schemes into Info.plist"
 
       - name: Import signing certificate and profile
+        if: ${{ !inputs.skip_ios_build }}
         env:
           IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
           IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
@@ -321,6 +434,7 @@ jobs:
           signing_fail "iOS signing unavailable. Set IOS_CERTIFICATE_BASE64 + IOS_PROVISIONING_PROFILE_BASE64, or APP_STORE_CONNECT_API_KEY_* (+ CERTIFICATE_PRIVATE_KEY)."
 
       - name: Resolve Flutter version
+        if: ${{ !inputs.skip_ios_build }}
         id: version
         shell: bash
         run: |
@@ -355,6 +469,7 @@ jobs:
           echo "::notice::iOS version ${NAME} (${CODE}) run=${{ github.run_number }} sha=${SHORT_SHA} env=${{ inputs.am_env }} @ ${TS_UTC}"
 
       - name: Build iOS IPA
+        if: ${{ !inputs.skip_ios_build }}
         env:
           AM_DOMAIN: ${{ inputs.am_domain }}
           AM_ENV_LABEL: ${{ inputs.am_env }}
@@ -418,6 +533,7 @@ jobs:
           echo "UNSIGNED=0" >> "$GITHUB_ENV"
 
       - name: Stage IPA artifact
+        if: ${{ !inputs.skip_ios_build }}
         id: meta
         shell: bash
         run: |
@@ -436,7 +552,7 @@ jobs:
           ls -la "$GITHUB_WORKSPACE/ios-ci-out"
 
       - name: Upload iOS artifact
-        if: ${{ inputs.upload_artifact }}
+        if: ${{ !inputs.skip_ios_build && inputs.upload_artifact }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.meta.outputs.artifact_name }}
@@ -446,7 +562,7 @@ jobs:
 
       # Long-lived backup for reuse (TestFlight re-upload / local install) without rebuilding
       - name: Upload iOS keep artifact (backup)
-        if: ${{ inputs.upload_artifact && inputs.keep_artifact }}
+        if: ${{ !inputs.skip_ios_build && inputs.upload_artifact && inputs.keep_artifact }}
         uses: actions/upload-artifact@v4
         with:
           name: ios-keep-${{ github.sha }}
@@ -576,9 +692,10 @@ jobs:
               with tempfile.NamedTemporaryFile(suffix=".sig", delete=False) as sigf:
                   sig_path = sigf.name
               try:
-                  subprocess.check_call(
+                  subprocess.run(
                       ["openssl", "dgst", "-sha256", "-sign", str(p8_path), "-out", sig_path],
                       input=signing_input,
+                      check=True,
                   )
                   der = Path(sig_path).read_bytes()
               finally:

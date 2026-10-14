@@ -837,6 +837,9 @@ jobs:
               print(f"::error::betaGroups list failed status={status} body={groups}", file=sys.stderr)
               sys.exit(1)
 
+          # ASC: Internal groups cannot be linked via relationships/builds (422
+          # "Cannot add internal group to a build"). After VALID + export compliance,
+          # Internal Testers get the build automatically. External groups need POST.
           assigned = []
           for g in groups.get("data") or []:
               gattrs = g.get("attributes") or {}
@@ -846,6 +849,13 @@ jobs:
                   if name != group_filter:
                       continue
               elif not is_internal:
+                  continue
+              if is_internal:
+                  assigned.append(f"{name} (internal — auto after VALID)")
+                  print(
+                      f"Internal group '{name}' receives VALID builds automatically "
+                      "(ASC forbids API assign to internal groups)"
+                  )
                   continue
               gid = g["id"]
               token = mint_jwt(key_id, issuer, p8)
@@ -857,14 +867,14 @@ jobs:
               )
               # 204/201 success; 409 already linked is OK
               if st in (200, 201, 204, 409):
-                  assigned.append(f"{name} ({'internal' if is_internal else 'external'})")
+                  assigned.append(f"{name} (external)")
                   print(f"Assigned build {version_code} → beta group '{name}' (status={st})")
               else:
                   print(f"::warning::Failed to assign group '{name}' status={st} body={body}")
 
           if not assigned:
               print(
-                  "::error::No TestFlight beta groups assigned "
+                  "::error::No TestFlight beta groups found "
                   f"(filter={group_filter or 'all Internal'}). Create an Internal group in ASC.",
                   file=sys.stderr,
               )

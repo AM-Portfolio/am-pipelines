@@ -1,0 +1,23 @@
+name: Checkout iOS Mobile CI helpers
+description: Sparse-checkout am-pipelines .github/workflows/ios (+ actions) for reusable scripts
+inputs:
+  ref:
+    description: am-pipelines git ref (prefer github.workflow_sha from reusable workflow)
+    required: true
+  path:
+    description: Checkout path
+    required: false
+    default: _am_pipelines
+runs:
+  using: composite
+  steps:
+    - name: Checkout am-pipelines iOS helpers
+      uses: actions/checkout@v4
+      with:
+        repository: AM-Portfolio/am-pipelines
+        ref: ${{ inputs.ref }}
+        path: ${{ inputs.path }}
+        sparse-checkout: |
+          .github/workflows/ios
+          .github/actions
+        sparse-checkout-cone-mode: false

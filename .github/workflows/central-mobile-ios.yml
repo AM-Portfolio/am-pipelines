@@ -234,31 +234,8 @@ jobs:
             cp "$PROFILE_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/"$PROFILE_UUID.mobileprovision"
             # Manual App Store export — Automatic/Development signing fails with Distribution-only CI certs
             EXPORT_CI_PLIST="ios/ExportOptions.ci.plist"
-            cat > "$EXPORT_CI_PLIST" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>method</key>
-	<string>app-store</string>
-	<key>destination</key>
-	<string>export</string>
-	<key>signingStyle</key>
-	<string>manual</string>
-	<key>teamID</key>
-	<string>${TEAM_ID}</string>
-	<key>provisioningProfiles</key>
-	<dict>
-		<key>${BUNDLE_ID}</key>
-		<string>${PROFILE_NAME}</string>
-	</dict>
-	<key>stripSwiftSymbols</key>
-	<true/>
-	<key>compileBitcode</key>
-	<false/>
-</dict>
-</plist>
-EOF
+            TEAM_ID="$TEAM_ID" BUNDLE_ID="$BUNDLE_ID" PROFILE_NAME="$PROFILE_NAME" EXPORT_CI_PLIST="$EXPORT_CI_PLIST" \
+              python3 -c 'import os,plistlib; from pathlib import Path; Path(os.environ["EXPORT_CI_PLIST"]).write_bytes(plistlib.dumps({"method":"app-store","destination":"export","signingStyle":"manual","teamID":os.environ["TEAM_ID"],"provisioningProfiles":{os.environ["BUNDLE_ID"]:os.environ["PROFILE_NAME"]},"stripSwiftSymbols":True,"compileBitcode":False}))'
             echo "PROFILE_UUID=$PROFILE_UUID" >> "$GITHUB_ENV"
             echo "PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
             echo "DEVELOPMENT_TEAM=$TEAM_ID" >> "$GITHUB_ENV"

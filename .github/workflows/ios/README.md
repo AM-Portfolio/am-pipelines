@@ -3,7 +3,7 @@
 GitHub only auto-runs workflow YAML at `.github/workflows/*.yml` (top level).  
 This folder holds **reusable scripts** used by the thin orchestrator [`../central-mobile-ios.yml`](../central-mobile-ios.yml).
 
-Jobs checkout `AM-Portfolio/am-pipelines` at `github.workflow_sha` into `_am_pipelines/`, then run:
+Jobs checkout `AM-Portfolio/am-pipelines@main` into `_am_pipelines/` (do not use `github.workflow_sha` under `workflow_call` — that is the **caller** SHA), then run:
 
 ```text
 bash _am_pipelines/.github/workflows/ios/<script>.sh

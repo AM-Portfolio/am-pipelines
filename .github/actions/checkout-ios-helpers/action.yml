@@ -2,8 +2,9 @@ name: Checkout iOS Mobile CI helpers
 description: Sparse-checkout am-pipelines .github/workflows/ios (+ actions) for reusable scripts
 inputs:
   ref:
-    description: am-pipelines git ref (prefer github.workflow_sha from reusable workflow)
-    required: true
+    description: am-pipelines git ref (use main — same pin as callers' uses: …@main)
+    required: false
+    default: main
   path:
     description: Checkout path
     required: false

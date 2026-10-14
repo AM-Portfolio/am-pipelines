@@ -27,8 +27,8 @@ Callers set deploy flags **false** on non-`main` branches.
 
 ### iOS
 
-- `deploy_internal` → TestFlight (`ios-internal`)
-- `deploy_production` → App Store path after TestFlight (`ios-prod`)
+- `deploy_internal` → TestFlight (`ios-internal`; wait VALID + assign via `.github/workflows/ios/testflight_wait_assign.py`)
+- `deploy_production` → after `ios-prod` approval: skip duplicate altool when TestFlight already uploaded, then **Submit for Review** via `.github/workflows/ios/appstore_submit.py` (fails clearly if ASC screenshots / App Privacy / etc. are incomplete)
 - Injects `GIDClientID` + URL schemes from `GOOGLE_IOS_CLIENT_ID` / `GOOGLE_WEB_CLIENT_ID`
 - Without `IOS_CERTIFICATE_BASE64` + profile: build may produce unsigned app artifact only (no store upload)
 

@@ -71,7 +71,7 @@ jobs:
         with:
           ref: ${{ inputs.git_ref || github.sha }}
           fetch-depth: 0
-          token: ${{ secrets.AM_GITHUB_PAT || secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ github.token }}
 
       - name: Resolve SDK name
         id: meta
@@ -181,7 +181,7 @@ jobs:
           && inputs.use_release_version
           && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
         env:
-          GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN || github.token }}
           MAVEN_REPO_URL: ${{ inputs.maven_repo_url }}
         run: |
           ROOT_POM="${{ github.workspace }}/pom.xml"
@@ -269,7 +269,7 @@ jobs:
       - name: Verify Java library
         if: inputs.language == 'java' && inputs.action == 'verify'
         env:
-          GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN || github.token }}
         run: |
           ROOT_POM="${{ github.workspace }}/pom.xml"
           MODULE_DIR="${{ inputs.working_directory }}"
@@ -285,7 +285,7 @@ jobs:
       - name: Build and Deploy Java library to GitHub Packages
         if: inputs.language == 'java' && inputs.action == 'publish'
         env:
-          GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN || github.token }}
         run: |
           ROOT_POM="${{ github.workspace }}/pom.xml"
           MODULE_DIR="${{ inputs.working_directory }}"
@@ -318,7 +318,7 @@ jobs:
           && inputs.advance_snapshot
           && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
         env:
-          GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN || github.token }}
         run: |
           # Use the release version set by the promote step to compute next snapshot.
           # This is deterministic and does NOT depend on the current working tree state.

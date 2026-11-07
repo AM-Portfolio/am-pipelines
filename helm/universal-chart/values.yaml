@@ -49,6 +49,10 @@ resources:
 
 env: {}
 
+# Optional extra pod volumes (e.g. am-qa-agents SPT catalog ConfigMap mount).
+extraVolumes: []
+extraVolumeMounts: []
+
 # Optional pod template annotations (e.g. prometheus.io/scrape for am-observability)
 podAnnotations: {}
 

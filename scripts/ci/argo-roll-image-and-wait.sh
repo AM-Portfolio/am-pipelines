@@ -2,9 +2,8 @@
 # Roll dev/preprod image via Argo API helm parameters — NO gitops / service commits.
 # Contabo Argo (ARGOCD_SERVER + ARGOCD_AUTH_TOKEN).
 #
-# Policy: env=dev and env=preprod always dest am-dev-apps
-#   (am-apps-dev / am-apps-preprod). Contabo am-vps-nonprod is for AI agents.
-# Opt-in: NONPROD_ORIGIN=vps forces Contabo Kind for that roll only.
+# Policy: env=dev -> am-dev-apps; env=preprod -> am-vps-nonprod (Contabo Kind).
+# Break-glass: NONPROD_ORIGIN=local forces laptop Kind for preprod.
 #
 # Env:
 #   INPUT_SERVICE_NAME  e.g. am-api-gateway
@@ -13,7 +12,7 @@
 #   ARGOCD_AUTH_TOKEN
 # Optional:
 #   ARGOCD_SERVER, WAIT_HEALTH_SECONDS
-#   NONPROD_ORIGIN=vps  (opt-in Contabo Kind; default never)
+#   NONPROD_ORIGIN=local|vps
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -61,12 +60,19 @@ cur_name = dest.get("name") or ""
 cur_ns = dest.get("namespace") or ""
 
 want_ns = "am-apps-dev" if env == "dev" else "am-apps-preprod"
-if origin == "vps":
+if origin == "local":
+    want_name = "am-dev-apps"
+    reason = "NONPROD_ORIGIN=local (laptop Kind break-glass)"
+elif origin == "vps" or env == "preprod":
     want_name = "am-vps-nonprod"
-    reason = "NONPROD_ORIGIN=vps (opt-in Contabo Kind)"
+    reason = (
+        "preprod Contabo Kind"
+        if env == "preprod" and origin != "vps"
+        else "NONPROD_ORIGIN=vps"
+    )
 else:
     want_name = "am-dev-apps"
-    reason = "dev/preprod always am-dev-apps (VPS reserved for AI agents)"
+    reason = "dev -> am-dev-apps (laptop Kind)"
 
 changed = False
 if cur_name != want_name or cur_ns != want_ns:
@@ -90,7 +96,7 @@ PY
 CHANGED="$(echo "$DEST_PATCHED" | python3 -c 'import json,sys; print("1" if json.load(sys.stdin).get("changed") else "0")')"
 RAW="$(echo "$DEST_PATCHED" | python3 -c 'import json,sys; json.dump(json.load(sys.stdin)["app"], sys.stdout)')"
 if [[ "$CHANGED" == "1" ]]; then
-  echo "::notice::Retargeted ${APP} destination (${ENV}) — am-dev-apps policy (or NONPROD_ORIGIN=vps)"
+  echo "::notice::Retargeted ${APP} destination (${ENV}) — preprod Contabo / dig laptop (or NONPROD_ORIGIN)"
 fi
 
 # Build Application PUT body + Sync body (sources with helm.parameters) so AppSet wipe

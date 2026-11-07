@@ -359,7 +359,18 @@ print(health, sync, ",".join(imgs), param_tag)
     sleep 10
   done
   if [[ "${STRICT_IMAGE_TAG:-0}" == "1" && -n "$expect_tag" ]]; then
-    echo "::error::${app} wait-healthy timeout after ${wait_health}s — tag=${expect_tag} not evidenced (health=${last_health} sync=${last_sync} images=${last_images} param=${last_param_tag})"
+    # Distinguish tag-missing vs Healthy never reached (Contabo Kind pull often Progressing).
+    local tag_seen=0
+    if [[ -n "$last_images" && "$last_images" == *"$expect_tag"* ]]; then
+      tag_seen=1
+    elif [[ -z "$last_images" && -n "$last_param_tag" && "$last_param_tag" == "$expect_tag" ]]; then
+      tag_seen=1
+    fi
+    if [[ "$tag_seen" == "1" && "$last_health" != "Healthy" ]]; then
+      echo "::error::${app} wait-healthy timeout after ${wait_health}s — tag=${expect_tag} seen but health=${last_health} (sync=${last_sync} images=${last_images} param=${last_param_tag}). Raise ROLL_WAIT_HEALTH_SECONDS / WAIT_HEALTH_SECONDS."
+    else
+      echo "::error::${app} wait-healthy timeout after ${wait_health}s — tag=${expect_tag} not evidenced (health=${last_health} sync=${last_sync} images=${last_images} param=${last_param_tag})"
+    fi
   else
     echo "::error::${app} wait-healthy timeout after ${wait_health}s — last health=${last_health} sync=${last_sync} images=${last_images}"
   fi

@@ -5,7 +5,8 @@
 # Env:
 #   INPUT_SERVICE_NAME, INPUT_ENVIRONMENT (prod|dr), INPUT_IMAGE_TAG
 #   ARGOCD_AUTH_TOKEN, GH_TOKEN
-# Optional: WAIT_PROMOTE_SECONDS (default 300), WAIT_HEALTH_SECONDS
+# Optional: WAIT_PROMOTE_SECONDS (default 900), WAIT_HEALTH_SECONDS
+# Default 15m covers Contabo Environment Approve delay before promote-to-prod starts.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,7 +16,7 @@ source "${SCRIPT_DIR}/argo-api-lib.sh"
 SVC="${INPUT_SERVICE_NAME:?}"
 ENV="${INPUT_ENVIRONMENT:?}"
 TAG="${INPUT_IMAGE_TAG:?}"
-WAIT_PROMOTE="${WAIT_PROMOTE_SECONDS:-300}"
+WAIT_PROMOTE="${WAIT_PROMOTE_SECONDS:-900}"
 APP="${SVC}-${ENV}"
 
 case "$ENV" in

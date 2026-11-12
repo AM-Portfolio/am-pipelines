@@ -20,6 +20,11 @@ on:
         required: false
         type: string
         default: "stable"
+      flutter_version:
+        description: "Pin Flutter SDK (avoid floating stable Dart breaks). Empty = channel only."
+        required: false
+        type: string
+        default: "3.44.0"
       build_mode:
         description: "debug | release (Phase 1 default debug - no keystore required)"
         required: false
@@ -144,6 +149,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: ${{ inputs.flutter_channel }}
+          flutter-version: ${{ inputs.flutter_version }}
           cache: true
 
       - name: Flutter doctor

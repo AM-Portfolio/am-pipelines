@@ -387,6 +387,7 @@ jobs:
           releaseFiles: ${{ github.workspace }}/android-out/*.aab
           tracks: internal
           status: completed
+          changesNotSentForReview: true
 
   # ============================================================
   # PROD - Play Production (main only; after Internal)
@@ -460,3 +461,4 @@ jobs:
           releaseFiles: ${{ github.workspace }}/android-out/*.aab
           tracks: production
           status: completed
+          changesNotSentForReview: true

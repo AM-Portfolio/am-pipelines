@@ -349,6 +349,7 @@ jobs:
         env:
           KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
           KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
           PURPOSE: TestFlight
         run: bash _am_pipelines/.github/workflows/ios/write_asc_key.sh
 
@@ -357,6 +358,7 @@ jobs:
         env:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          BUNDLE_ID: ${{ inputs.bundle_id }}
           VERSION_NAME: ${{ needs.ios-build.outputs.version_name }}
           VERSION_CODE: ${{ needs.ios-build.outputs.version_code }}
           UPLOAD_MODE: testflight
@@ -441,6 +443,7 @@ jobs:
         env:
           KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
           KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
           PURPOSE: App Store submit
         run: bash _am_pipelines/.github/workflows/ios/write_asc_key.sh
 
@@ -449,6 +452,7 @@ jobs:
         env:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          BUNDLE_ID: ${{ inputs.bundle_id }}
           VERSION_NAME: ${{ needs.ios-build.outputs.version_name }}
           VERSION_CODE: ${{ needs.ios-build.outputs.version_code }}
           UPLOAD_MODE: appstore

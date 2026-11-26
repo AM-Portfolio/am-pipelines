@@ -75,6 +75,11 @@ on:
         required: false
         type: string
         default: ""
+      version_code_offset:
+        description: "Added to github.run_number for CFBundleVersion"
+        required: false
+        type: number
+        default: 0
       testflight_beta_group:
         description: "TestFlight beta group name (empty = all Internal groups)"
         required: false
@@ -267,6 +272,7 @@ jobs:
           RUN_NUMBER: ${{ github.run_number }}
           BUNDLE_ID: ${{ inputs.bundle_id }}
           AM_ENV: ${{ inputs.am_env }}
+          VERSION_CODE_OFFSET: ${{ inputs.version_code_offset }}
         run: bash ${{ github.workspace }}/_am_pipelines/.github/workflows/ios/resolve_version.sh
 
       - name: Build iOS IPA

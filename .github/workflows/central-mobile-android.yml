@@ -401,7 +401,8 @@ jobs:
   android-prod:
     name: Android -> Production
     needs: [android-build, android-preprod]
-    if: ${{ always() && (inputs.deploy_production || inputs.deploy_prod) && (needs.android-preprod.result == 'success' || needs.android-preprod.result == 'skipped') && needs.android-build.result == 'success' }}
+    # Enforce the production branch policy at the reusable-workflow boundary too.
+    if: ${{ always() && github.ref == 'refs/heads/main' && (inputs.deploy_production || inputs.deploy_prod) && (needs.android-preprod.result == 'success' || needs.android-preprod.result == 'skipped') && needs.android-build.result == 'success' }}
     runs-on: ubuntu-latest
     environment: ${{ inputs.gh_env_prod || 'android-prod' }}
     permissions:

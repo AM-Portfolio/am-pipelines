@@ -378,7 +378,8 @@ jobs:
   ios-prod:
     name: iOS -> App Store
     needs: [ios-build, ios-internal]
-    if: ${{ always() && inputs.deploy_production && (needs.ios-internal.result == 'success' || needs.ios-internal.result == 'skipped') && needs.ios-build.result == 'success' }}
+    # Enforce the production branch policy at the reusable-workflow boundary too.
+    if: ${{ always() && github.ref == 'refs/heads/main' && inputs.deploy_production && (needs.ios-internal.result == 'success' || needs.ios-internal.result == 'skipped') && needs.ios-build.result == 'success' }}
     runs-on: macos-latest
     environment: ${{ inputs.gh_env_prod }}
     permissions:

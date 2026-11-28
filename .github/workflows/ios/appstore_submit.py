@@ -89,6 +89,38 @@ def main() -> int:
         )
         return 1
 
+    # A rejected submission cannot accept new items. Check before changing
+    # the App Store version so repeated CI runs leave the submission alone.
+    token = mint_jwt(key_id, issuer, p8)
+    st, existing = api(
+        "GET",
+        "https://api.appstoreconnect.apple.com/v1/reviewSubmissions?"
+        + urllib.parse.urlencode(
+            {"filter[app]": app_id, "filter[platform]": "IOS", "limit": 200}
+        ),
+        token,
+    )
+    if st != 200:
+        print(
+            f"::error::Could not check review submissions (status={st}).\n"
+            f"{format_asc_errors(existing)}",
+            file=sys.stderr,
+        )
+        return 1
+    for submission in existing.get("data") or []:
+        if (submission.get("attributes") or {}).get("state") == "UNRESOLVED_ISSUES":
+            submission_id = submission["id"]
+            print(
+                "::error::App Store review submission has unresolved issues. "
+                "Open the rejected item, choose Edit, confirm the new build, "
+                "Add for Review, then Resubmit to App Review. "
+                "CI cannot add another item while this submission is unresolved.\n"
+                f"https://appstoreconnect.apple.com/apps/{app_id}/distribution/"
+                f"reviewsubmissions/details/{submission_id}",
+                file=sys.stderr,
+            )
+            return 1
+
     token = mint_jwt(key_id, issuer, p8)
     q = urllib.parse.urlencode(
         {
@@ -182,20 +214,11 @@ def main() -> int:
         print(format_asc_errors(rel), file=sys.stderr)
         return 1
 
-    # Open or create review submission
-    token = mint_jwt(key_id, issuer, p8)
-    st, existing = api(
-        "GET",
-        "https://api.appstoreconnect.apple.com/v1/reviewSubmissions?"
-        + urllib.parse.urlencode(
-            {"filter[app]": app_id, "filter[platform]": "IOS", "limit": 10}
-        ),
-        token,
-    )
+    # Open or create a draft review submission.
     submission_id = None
     for s in existing.get("data") or []:
         state = (s.get("attributes") or {}).get("state")
-        if state in ("READY_FOR_REVIEW", "UNRESOLVED_ISSUES"):
+        if state == "READY_FOR_REVIEW":
             submission_id = s["id"]
             print(f"Reusing reviewSubmission {submission_id} state={state}")
             break
@@ -243,8 +266,7 @@ def main() -> int:
     )
     if st not in (200, 201):
         print(
-            "::error::Cannot add App Store version to review submission. "
-            "Fix ASC metadata (screenshots, App Privacy, etc.) then re-run.\n"
+            "::error::Cannot add App Store version to review submission.\n"
             f"{format_asc_errors(item)}",
             file=sys.stderr,
         )
@@ -253,8 +275,7 @@ def main() -> int:
             with open(summary, "a", encoding="utf-8") as fh:
                 fh.write(
                     "\n### App Store submit blocked\n\n"
-                    "ASC rejected reviewSubmissionItems. Typical gaps: screenshots, "
-                    "App Privacy, category, pricing.\n\n"
+                    "ASC rejected reviewSubmissionItems. Review the API error below.\n\n"
                     f"```\n{format_asc_errors(item)}\n```\n"
                 )
         return 1

@@ -385,15 +385,21 @@ jobs:
           name: ${{ needs.android-build.outputs.artifact_name }}
           path: android-out
 
-      - name: Upload to Google Play Internal Testing
-        uses: r0adkll/upload-google-play@v1
+      - name: Checkout am-pipelines (Play upload script)
+        uses: actions/checkout@v4
         with:
-          serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
-          packageName: ${{ inputs.package_name }}
-          releaseFiles: ${{ github.workspace }}/android-out/*.aab
-          tracks: internal
-          status: completed
-          changesNotSentForReview: true
+          repository: AM-Portfolio/am-pipelines
+          path: am-pipelines-repo
+          ref: main
+
+      - name: Upload to Google Play Internal Testing
+        env:
+          PLAY_STORE_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
+          PACKAGE_NAME: ${{ inputs.package_name }}
+          AAB_PATH: ${{ github.workspace }}/android-out/*.aab
+          TRACK: internal
+          EXPECTED_VERSION_CODE: ${{ needs.android-build.outputs.version_code }}
+        run: python3 am-pipelines-repo/scripts/ci/_play_upload_bundle.py
 
   # ============================================================
   # PROD - Play Production (main only; after Internal)
@@ -417,8 +423,7 @@ jobs:
       # Same AAB already on Internal — re-upload fails with "version code already used".
       # Promote assigns those versionCodes to production (no binary upload).
       # Checkout am-pipelines (not caller SHA) so re-runs of older commits still get the script.
-      - name: Checkout am-pipelines (promote script)
-        if: ${{ needs.android-preprod.result == 'success' }}
+      - name: Checkout am-pipelines (Play release scripts)
         uses: actions/checkout@v4
         with:
           repository: AM-Portfolio/am-pipelines
@@ -461,11 +466,10 @@ jobs:
 
       - name: Upload to Google Play Production
         if: ${{ needs.android-preprod.result == 'skipped' }}
-        uses: r0adkll/upload-google-play@v1
-        with:
-          serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
-          packageName: ${{ inputs.package_name }}
-          releaseFiles: ${{ github.workspace }}/android-out/*.aab
-          tracks: production
-          status: completed
-          changesNotSentForReview: true
+        env:
+          PLAY_STORE_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
+          PACKAGE_NAME: ${{ inputs.package_name }}
+          AAB_PATH: ${{ github.workspace }}/android-out/*.aab
+          TRACK: production
+          EXPECTED_VERSION_CODE: ${{ needs.android-build.outputs.version_code }}
+        run: python3 am-pipelines-repo/scripts/ci/_play_upload_bundle.py
